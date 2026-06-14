@@ -2802,6 +2802,8 @@ got_it:
 				}
 			}
 
+			if (!F2FS_I_SB(inode)->batch_read_pages_pending)
+				len_blks = 1;
 			/*
 			 * If an entire folio is added to one bio,
 			 * folio_end_read() can complete the folio read status
@@ -2837,7 +2839,9 @@ got_it:
 		/* We must increment read_pages_pending before possible BIOs submitting
 		 * to prevent from premature folio_end_read() call on folio.
 		 */
-		if (folio_test_large(folio) && !whole_folio_in_bio) {
+		if (folio_test_large(folio) &&
+		    !(whole_folio_in_bio &&
+		      F2FS_I_SB(inode)->skip_ffs_for_whole_bio)) {
 			ffs = ffs_find_or_alloc(folio);
 
 			/* set the bitmap to wait */
