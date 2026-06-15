@@ -4898,6 +4898,8 @@ try_onemore:
 
 	sbi->max_folio_order_cap = 2;
 	sbi->min_folio_order_cap = 0;
+	sbi->skip_ffs_for_whole_bio = 1;
+	sbi->batch_read_pages_pending = 1;
 
 	/* initialize locks within allocated memory */
 	init_f2fs_rwsem(&sbi->gc_lock);

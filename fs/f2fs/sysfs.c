@@ -224,6 +224,48 @@ static ssize_t min_folio_order_cap_store(struct f2fs_attr *a,
 	return count;
 }
 
+static ssize_t skip_ffs_for_whole_bio_show(struct f2fs_attr *a,
+		struct f2fs_sb_info *sbi, char *buf)
+{
+	return sysfs_emit(buf, "%u\n", READ_ONCE(sbi->skip_ffs_for_whole_bio));
+}
+
+static ssize_t skip_ffs_for_whole_bio_store(struct f2fs_attr *a,
+		struct f2fs_sb_info *sbi, const char *buf, size_t count)
+{
+	unsigned long t;
+	int ret;
+
+	ret = kstrtoul(skip_spaces(buf), 0, &t);
+	if (ret)
+		return ret;
+	if (t > 1)
+		return -EINVAL;
+	WRITE_ONCE(sbi->skip_ffs_for_whole_bio, (unsigned int)t);
+	return count;
+}
+
+static ssize_t batch_read_pages_pending_show(struct f2fs_attr *a,
+		struct f2fs_sb_info *sbi, char *buf)
+{
+	return sysfs_emit(buf, "%u\n", READ_ONCE(sbi->batch_read_pages_pending));
+}
+
+static ssize_t batch_read_pages_pending_store(struct f2fs_attr *a,
+		struct f2fs_sb_info *sbi, const char *buf, size_t count)
+{
+	unsigned long t;
+	int ret;
+
+	ret = kstrtoul(skip_spaces(buf), 0, &t);
+	if (ret)
+		return ret;
+	if (t > 1)
+		return -EINVAL;
+	WRITE_ONCE(sbi->batch_read_pages_pending, (unsigned int)t);
+	return count;
+}
+
 static ssize_t gc_mode_show(struct f2fs_attr *a,
 		struct f2fs_sb_info *sbi, char *buf)
 {
@@ -1478,6 +1520,8 @@ static struct attribute *f2fs_attrs[] = {
 	ATTR_LIST(allocate_section_policy),
 	ATTR_LIST(max_folio_order_cap),
 	ATTR_LIST(min_folio_order_cap),
+	ATTR_LIST(skip_ffs_for_whole_bio),
+	ATTR_LIST(batch_read_pages_pending),
 	NULL,
 };
 ATTRIBUTE_GROUPS(f2fs);

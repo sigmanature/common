@@ -1943,6 +1943,8 @@ struct f2fs_sb_info {
 
 	u32 max_folio_order_cap;	/* clamp regular-file mapping max order */
 	u32 min_folio_order_cap;	/* clamp regular-file mapping min order */
+	unsigned int skip_ffs_for_whole_bio;	/* skip ffs alloc if whole folio in one bio */
+	unsigned int batch_read_pages_pending;	/* batch read_pages_pending increment */
 };
 
 struct f2fs_folio_state {
@@ -5005,17 +5007,14 @@ static inline bool f2fs_inode_may_use_large_folio(struct inode *inode)
 
 static inline void f2fs_set_inode_mapping_order(struct inode *inode)
 {
-	unsigned int min_order;
 	unsigned int max_order;
 
 	if (!f2fs_inode_may_use_large_folio(inode))
 		return;
 
-	min_order = READ_ONCE(F2FS_I_SB(inode)->min_folio_order_cap);
 	max_order = min_t(unsigned int, 4,
 			  READ_ONCE(F2FS_I_SB(inode)->max_folio_order_cap));
-	min_order = min(min_order, max_order);
-	mapping_set_folio_order_range(inode->i_mapping, min_order, max_order);
+	mapping_set_folio_order_range(inode->i_mapping, 0, max_order);
 }
 
 static inline bool f2fs_is_db_dentry(const struct dentry *dentry)
