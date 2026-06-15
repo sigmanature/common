@@ -87,6 +87,7 @@ static vm_fault_t f2fs_vm_page_mkwrite(struct vm_fault *vmf)
 	loff_t isize;
 	loff_t folio_start;
 	loff_t valid_end;
+	size_t subpage_off;
 	size_t dirty_len;
 
 	if (unlikely(IS_IMMUTABLE(inode)))
@@ -137,8 +138,12 @@ static vm_fault_t f2fs_vm_page_mkwrite(struct vm_fault *vmf)
 	folio_lock(folio);
 	isize = i_size_read(inode);
 	folio_start = folio_pos(folio);
+	subpage_off = offset_in_folio(folio, pos);
 	valid_end = min_t(loff_t, folio_start + folio_size(folio), isize);
-	dirty_len = valid_end > folio_start ? valid_end - folio_start : 0;
+	dirty_len = PAGE_SIZE;
+	if (subpage_off + dirty_len > valid_end - folio_start)
+		dirty_len = valid_end > folio_start + subpage_off ?
+				valid_end - folio_start - subpage_off : 0;
 
 	if (is_inode_flag_set(inode, FI_DB_FILE))
 		trace_f2fs_large_folio_mkwrite(inode, folio, pidx, pos, isize,
@@ -157,10 +162,11 @@ static vm_fault_t f2fs_vm_page_mkwrite(struct vm_fault *vmf)
 	if (need_alloc) {
 		/* block allocation */
 		if (folio_test_large(folio)) {
+			pgoff_t start = folio->index + (subpage_off >> PAGE_SHIFT);
 			pgoff_t i, nr = DIV_ROUND_UP(dirty_len, PAGE_SIZE);
 
-			for (i = 0; i < nr; i++) {
-				err = f2fs_get_block_locked(&dn, folio->index + i);
+			for (i = start; i < start + nr; i++) {
+				err = f2fs_get_block_locked(&dn, i);
 				if (err)
 					break;
 			}
@@ -192,9 +198,9 @@ static vm_fault_t f2fs_vm_page_mkwrite(struct vm_fault *vmf)
 	}
 
 	if (folio_test_large(folio)) {
-		if (!folio_has_ffs(folio))
-			ffs_find_or_alloc(folio);
-		ffs_mark_subrange_dirty(folio, 0, dirty_len);
+		ffs_find_or_alloc(folio);
+		if (dirty_len)
+			ffs_mark_subrange_dirty(folio, subpage_off, dirty_len);
 	}
 	folio_mark_dirty(folio);
 	f2fs_update_iostat(sbi, inode, APP_MAPPED_IO, F2FS_BLKSIZE);
