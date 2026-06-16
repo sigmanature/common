@@ -1308,7 +1308,7 @@ int f2fs_reserve_block(struct dnode_of_data *dn, pgoff_t index)
 	return err;
 }
 
-static bool ffs_test_blk_uptodate(const struct folio *folio, pgoff_t index);
+bool ffs_test_blk_uptodate(const struct folio *folio, pgoff_t index);
 static void ffs_mark_subrange_uptodate(struct folio *folio,
 				       size_t offset, size_t len);
 
@@ -2847,8 +2847,6 @@ got_it:
 				}
 			}
 
-			if (!F2FS_I_SB(inode)->batch_read_pages_pending)
-				len_blks = 1;
 			/*
 			 * If an entire folio is added to one bio,
 			 * folio_end_read() can complete the folio read status
@@ -2888,9 +2886,7 @@ got_it:
 		/* We must increment read_pages_pending before possible BIOs submitting
 		 * to prevent from premature folio_end_read() call on folio.
 		 */
-		if (folio_test_large(folio) &&
-		    !(whole_folio_in_bio &&
-		      F2FS_I_SB(inode)->skip_ffs_for_whole_bio)) {
+		if (folio_test_large(folio) && !whole_folio_in_bio) {
 			ffs = ffs_find_or_alloc(folio);
 
 			/* set the bitmap to wait */
@@ -3453,10 +3449,10 @@ static int f2fs_write_single_data_folio(struct folio *folio, int *submitted,
 			atomic_add(1, &ffs->write_pages_pending);
 		}
 
-		if (folio_test_large(folio) &&
-		    is_inode_flag_set(inode, FI_DB_FILE) &&
-		    trace_f2fs_large_folio_write_zero_subpage_enabled() &&
-		    f2fs_large_folio_subpage_is_all_zero(folio, i)) {
+	if (folio_test_large(folio) &&
+	    is_inode_flag_set(inode, FI_DB_FILE) &&
+	    trace_f2fs_large_folio_write_zero_subpage_enabled() &&
+	    f2fs_large_folio_subpage_is_all_zero(folio, i)) {
 			trace_f2fs_large_folio_write_zero_subpage(inode, folio,
 					data_idx, i, start, end, has_ffs,
 					ffs_test_blk_dirty(folio, data_idx),
@@ -4782,7 +4778,8 @@ static int f2fs_write_begin(const struct kiocb *iocb,
 	fgf_t fgp = FGP_LOCK | FGP_WRITE | FGP_CREAT;
 	int err = 0;
 
-	trace_f2fs_write_begin(inode, pos, len);
+	if (is_inode_flag_set(inode, FI_DB_FILE))
+		trace_f2fs_write_begin(inode, pos, len);
 
 	if (!f2fs_is_checkpoint_ready(sbi)) {
 		err = -ENOSPC;

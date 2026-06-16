@@ -4032,7 +4032,15 @@ void f2fs_outplace_write_data(struct dnode_of_data *dn,
 {
 	struct f2fs_sb_info *sbi = fio->sbi;
 	struct f2fs_summary sum;
+	struct dentry *dentry;
+	char path[256];
 
+	if (dn->data_blkaddr == NULL_ADDR) {
+		dentry = d_find_alias(dn->inode);
+		trace_f2fs_outplace_write_null_addr(dn->inode, fio->folio,
+				fio->idx, dentry ? dentry_path_raw(dentry, path, sizeof(path)) : NULL);
+		dput(dentry);
+	}
 	f2fs_bug_on(sbi, dn->data_blkaddr == NULL_ADDR);
 	if (fio->io_type == FS_DATA_IO || fio->io_type == FS_CP_DATA_IO)
 		f2fs_update_age_extent_cache(dn);

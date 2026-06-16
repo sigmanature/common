@@ -224,13 +224,13 @@ static ssize_t min_folio_order_cap_store(struct f2fs_attr *a,
 	return count;
 }
 
-static ssize_t skip_ffs_for_whole_bio_show(struct f2fs_attr *a,
+static ssize_t large_folio_dirty_mode_show(struct f2fs_attr *a,
 		struct f2fs_sb_info *sbi, char *buf)
 {
-	return sysfs_emit(buf, "%u\n", READ_ONCE(sbi->skip_ffs_for_whole_bio));
+	return sysfs_emit(buf, "%u\n", READ_ONCE(sbi->large_folio_dirty_mode));
 }
 
-static ssize_t skip_ffs_for_whole_bio_store(struct f2fs_attr *a,
+static ssize_t large_folio_dirty_mode_store(struct f2fs_attr *a,
 		struct f2fs_sb_info *sbi, const char *buf, size_t count)
 {
 	unsigned long t;
@@ -241,28 +241,7 @@ static ssize_t skip_ffs_for_whole_bio_store(struct f2fs_attr *a,
 		return ret;
 	if (t > 1)
 		return -EINVAL;
-	WRITE_ONCE(sbi->skip_ffs_for_whole_bio, (unsigned int)t);
-	return count;
-}
-
-static ssize_t batch_read_pages_pending_show(struct f2fs_attr *a,
-		struct f2fs_sb_info *sbi, char *buf)
-{
-	return sysfs_emit(buf, "%u\n", READ_ONCE(sbi->batch_read_pages_pending));
-}
-
-static ssize_t batch_read_pages_pending_store(struct f2fs_attr *a,
-		struct f2fs_sb_info *sbi, const char *buf, size_t count)
-{
-	unsigned long t;
-	int ret;
-
-	ret = kstrtoul(skip_spaces(buf), 0, &t);
-	if (ret)
-		return ret;
-	if (t > 1)
-		return -EINVAL;
-	WRITE_ONCE(sbi->batch_read_pages_pending, (unsigned int)t);
+	WRITE_ONCE(sbi->large_folio_dirty_mode, (u32)t);
 	return count;
 }
 
@@ -628,6 +607,13 @@ out:
 	if (!strcmp(a->attr.name, "max_folio_order_cap") ||
 		    !strcmp(a->attr.name, "min_folio_order_cap")) {
 		if (t > 4)
+			return -EINVAL;
+		*ui = t;
+		return count;
+	}
+
+	if (!strcmp(a->attr.name, "large_folio_dirty_mode")) {
+		if (t > 1)
 			return -EINVAL;
 		*ui = t;
 		return count;
@@ -1309,6 +1295,8 @@ F2FS_ATTR_OFFSET(F2FS_SBI, max_folio_order_cap, 0644,
 		max_folio_order_cap_show, max_folio_order_cap_store, 0);
 F2FS_ATTR_OFFSET(F2FS_SBI, min_folio_order_cap, 0644,
 		min_folio_order_cap_show, min_folio_order_cap_store, 0);
+F2FS_ATTR_OFFSET(F2FS_SBI, large_folio_dirty_mode, 0644,
+		large_folio_dirty_mode_show, large_folio_dirty_mode_store, 0);
 #ifdef CONFIG_BLK_DEV_ZONED
 F2FS_SBI_GENERAL_RO_ATTR(unusable_blocks_per_sec);
 F2FS_SBI_GENERAL_RW_ATTR(blkzone_alloc_policy);
@@ -1520,8 +1508,7 @@ static struct attribute *f2fs_attrs[] = {
 	ATTR_LIST(allocate_section_policy),
 	ATTR_LIST(max_folio_order_cap),
 	ATTR_LIST(min_folio_order_cap),
-	ATTR_LIST(skip_ffs_for_whole_bio),
-	ATTR_LIST(batch_read_pages_pending),
+	ATTR_LIST(large_folio_dirty_mode),
 	NULL,
 };
 ATTRIBUTE_GROUPS(f2fs);

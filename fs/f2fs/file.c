@@ -140,10 +140,14 @@ static vm_fault_t f2fs_vm_page_mkwrite(struct vm_fault *vmf)
 	folio_start = folio_pos(folio);
 	subpage_off = offset_in_folio(folio, pos);
 	valid_end = min_t(loff_t, folio_start + folio_size(folio), isize);
-	dirty_len = PAGE_SIZE;
-	if (subpage_off + dirty_len > valid_end - folio_start)
-		dirty_len = valid_end > folio_start + subpage_off ?
-				valid_end - folio_start - subpage_off : 0;
+	if (READ_ONCE(sbi->large_folio_dirty_mode))
+		dirty_len = valid_end > folio_start ? valid_end - folio_start : 0;
+	else {
+		dirty_len = PAGE_SIZE;
+		if (subpage_off + dirty_len > valid_end - folio_start)
+			dirty_len = valid_end > folio_start + subpage_off ?
+					valid_end - folio_start - subpage_off : 0;
+	}
 
 	if (is_inode_flag_set(inode, FI_DB_FILE))
 		trace_f2fs_large_folio_mkwrite(inode, folio, pidx, pos, isize,
@@ -152,7 +156,8 @@ static vm_fault_t f2fs_vm_page_mkwrite(struct vm_fault *vmf)
 
 	if (unlikely(folio->mapping != inode->i_mapping ||
 			pos >= isize ||
-			!folio_test_uptodate(folio))) {
+			!ffs_test_blk_uptodate(folio,
+			folio->index + (subpage_off >> PAGE_SHIFT)))) {
 		folio_unlock(folio);
 		err = -EFAULT;
 		goto out_sem;
@@ -162,8 +167,11 @@ static vm_fault_t f2fs_vm_page_mkwrite(struct vm_fault *vmf)
 	if (need_alloc) {
 		/* block allocation */
 		if (folio_test_large(folio)) {
-			pgoff_t start = folio->index + (subpage_off >> PAGE_SHIFT);
+			pgoff_t start = folio->index;
 			pgoff_t i, nr = DIV_ROUND_UP(dirty_len, PAGE_SIZE);
+
+			if (!READ_ONCE(sbi->large_folio_dirty_mode))
+				start += (subpage_off >> PAGE_SHIFT);
 
 			for (i = start; i < start + nr; i++) {
 				err = f2fs_get_block_locked(&dn, i);
@@ -200,7 +208,9 @@ static vm_fault_t f2fs_vm_page_mkwrite(struct vm_fault *vmf)
 	if (folio_test_large(folio)) {
 		ffs_find_or_alloc(folio);
 		if (dirty_len)
-			ffs_mark_subrange_dirty(folio, subpage_off, dirty_len);
+			ffs_mark_subrange_dirty(folio,
+				READ_ONCE(sbi->large_folio_dirty_mode) ? 0 : subpage_off,
+				dirty_len);
 	}
 	folio_mark_dirty(folio);
 	f2fs_update_iostat(sbi, inode, APP_MAPPED_IO, F2FS_BLKSIZE);
@@ -213,7 +223,9 @@ out_sem:
 out:
 	ret = vmf_fs_error(err);
 
-	trace_f2fs_vm_page_mkwrite(inode, pidx, vmf->vma->vm_flags, ret);
+	if (is_inode_flag_set(inode, FI_DB_FILE))
+		trace_f2fs_vm_page_mkwrite(inode, pidx, folio->index,
+					   vmf->vma->vm_flags, ret);
 	return ret;
 }
 

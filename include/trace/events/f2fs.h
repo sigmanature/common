@@ -1259,6 +1259,7 @@ TRACE_EVENT(f2fs_write_begin,
 		__field(dev_t,	dev)
 		__field(ino_t,	ino)
 		__field(loff_t,	pos)
+		__field(pgoff_t, index)
 		__field(unsigned int, len)
 	),
 
@@ -1266,12 +1267,14 @@ TRACE_EVENT(f2fs_write_begin,
 		__entry->dev	= inode->i_sb->s_dev;
 		__entry->ino	= inode->i_ino;
 		__entry->pos	= pos;
+		__entry->index	= pos >> PAGE_SHIFT;
 		__entry->len	= len;
 	),
 
-	TP_printk("dev = (%d,%d), ino = %lu, pos = %llu, len = %u",
+	TP_printk("dev = (%d,%d), ino = %lu, pos = %llu, index = %lu, len = %u",
 		show_dev_ino(__entry),
 		(unsigned long long)__entry->pos,
+		(unsigned long)__entry->index,
 		__entry->len)
 );
 
@@ -1444,12 +1447,39 @@ DEFINE_EVENT(f2fs_mmap, f2fs_filemap_fault,
 	TP_ARGS(inode, index, flags, ret)
 );
 
-DEFINE_EVENT(f2fs_mmap, f2fs_vm_page_mkwrite,
+TRACE_EVENT(f2fs_vm_page_mkwrite,
 
-	TP_PROTO(struct inode *inode, pgoff_t index,
-			vm_flags_t flags, vm_fault_t ret),
+	TP_PROTO(struct inode *inode, pgoff_t subpage_index,
+			pgoff_t folio_index, vm_flags_t flags,
+			vm_fault_t ret),
 
-	TP_ARGS(inode, index, flags, ret)
+	TP_ARGS(inode, subpage_index, folio_index, flags, ret),
+
+	TP_STRUCT__entry(
+		__field(dev_t, dev)
+		__field(ino_t, ino)
+		__field(pgoff_t, subpage_index)
+		__field(pgoff_t, folio_index)
+		__field(vm_flags_t, flags)
+		__field(vm_fault_t, ret)
+	),
+
+	TP_fast_assign(
+		__entry->dev		= inode->i_sb->s_dev;
+		__entry->ino		= inode->i_ino;
+		__entry->subpage_index	= subpage_index;
+		__entry->folio_index	= folio_index;
+		__entry->flags		= flags;
+		__entry->ret		= ret;
+	),
+
+	TP_printk("dev = (%d,%d), ino = %lu, subpage_index = %lu, "
+		  "folio_index = %lu, flags: %s, ret: %s",
+		show_dev_ino(__entry),
+		(unsigned long)__entry->subpage_index,
+		(unsigned long)__entry->folio_index,
+		__print_flags(__entry->flags, "|", FAULT_FLAG_TRACE),
+		__print_flags(__entry->ret, "|", VM_FAULT_RESULT_TRACE))
 );
 
 TRACE_EVENT(f2fs_large_folio_dirty_without_ffs,
@@ -1683,6 +1713,45 @@ TRACE_EVENT(f2fs_mapping_set_error,
 	TP_printk("dev=(%d,%d) ino=%lu error=%d pid=%d comm=%s",
 		show_dev_ino(__entry),
 		__entry->error,
+		__entry->pid,
+		__entry->comm)
+);
+
+TRACE_EVENT(f2fs_outplace_write_null_addr,
+
+	TP_PROTO(struct inode *inode, struct folio *folio,
+		 pgoff_t sub_idx, const char *path),
+
+	TP_ARGS(inode, folio, sub_idx, path),
+
+	TP_STRUCT__entry(
+		__field(dev_t, dev)
+		__field(ino_t, ino)
+		__field(pgoff_t, folio_index)
+		__field(pgoff_t, sub_idx)
+		__field(pid_t, pid)
+		__array(char, comm, TASK_COMM_LEN)
+		__array(char, path, 256)
+	),
+
+	TP_fast_assign(
+		__entry->dev		= inode->i_sb->s_dev;
+		__entry->ino		= inode->i_ino;
+		__entry->folio_index	= folio ? folio->index : 0;
+		__entry->sub_idx	= sub_idx;
+		__entry->pid		= current->pid;
+		memcpy(__entry->comm, current->comm, TASK_COMM_LEN);
+		if (path)
+			strscpy(__entry->path, path, 256);
+		else
+			__entry->path[0] = '\0';
+	),
+
+	TP_printk("dev=(%d,%d) ino=%lu folio_index=%lu sub_idx=%lu path=%s pid=%d comm=%s",
+		show_dev_ino(__entry),
+		(unsigned long)__entry->folio_index,
+		(unsigned long)__entry->sub_idx,
+		__entry->path,
 		__entry->pid,
 		__entry->comm)
 );
