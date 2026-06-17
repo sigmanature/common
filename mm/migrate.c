@@ -16,6 +16,8 @@
 #include <linux/migrate.h>
 #include <linux/export.h>
 #include <linux/swap.h>
+#include <linux/huge_mm.h>
+#include <linux/percpu.h>
 #include <linux/swapops.h>
 #include <linux/pagemap.h>
 #include <linux/buffer_head.h>

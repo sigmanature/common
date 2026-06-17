@@ -63,6 +63,8 @@ enum scan_result {
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/huge_memory.h>
+#include <linux/huge_mm.h>
+#include <linux/percpu.h>
 
 static struct task_struct *khugepaged_thread __read_mostly;
 static DEFINE_MUTEX(khugepaged_mutex);

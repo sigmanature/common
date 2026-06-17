@@ -29,6 +29,8 @@
 #include <linux/backing-dev.h>
 #include <linux/pagewalk.h>
 #include <linux/swap.h>
+#include <linux/huge_mm.h>
+#include <linux/percpu.h>
 #include <linux/swapops.h>
 #include <linux/shmem_fs.h>
 #include <linux/mmu_notifier.h>
@@ -411,7 +413,7 @@ static int madvise_cold_or_pageout_pte_range(pmd_t *pmd,
 			folio_get(folio);
 			spin_unlock(ptl);
 			folio_lock(folio);
-			err = split_folio(folio);
+			this_cpu_write(folio_split_reason, FSR_MADVISE); err = split_folio_to_list(folio, NULL);
 			folio_unlock(folio);
 			folio_put(folio);
 			if (!err)
@@ -502,7 +504,7 @@ restart:
 				arch_leave_lazy_mmu_mode();
 				pte_unmap_unlock(start_pte, ptl);
 				start_pte = NULL;
-				err = split_folio(folio);
+				this_cpu_write(folio_split_reason, FSR_MADVISE); err = split_folio_to_list(folio, NULL);
 				folio_unlock(folio);
 				folio_put(folio);
 				start_pte = pte =
@@ -730,7 +732,7 @@ static int madvise_free_pte_range(pmd_t *pmd, unsigned long addr,
 				arch_leave_lazy_mmu_mode();
 				pte_unmap_unlock(start_pte, ptl);
 				start_pte = NULL;
-				err = split_folio(folio);
+				this_cpu_write(folio_split_reason, FSR_MADVISE); err = split_folio_to_list(folio, NULL);
 				folio_unlock(folio);
 				folio_put(folio);
 				pte = pte_offset_map_lock(mm, pmd, addr, &ptl);

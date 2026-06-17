@@ -47,6 +47,12 @@
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/thp.h>
+#undef CREATE_TRACE_POINTS
+
+#include <trace/events/huge_memory.h>
+
+DEFINE_PER_CPU(enum folio_split_reason, folio_split_reason);
+DEFINE_PER_CPU(enum deferred_split_reason, deferred_split_reason);
 
 /*
  * By default, transparent hugepage support is disabled in order to avoid
@@ -1273,7 +1279,7 @@ static vm_fault_t __do_huge_pmd_anonymous_page(struct vm_fault *vmf)
 		pgtable_trans_huge_deposit(vma->vm_mm, vmf->pmd, pgtable);
 		map_anon_folio_pmd(folio, vmf->pmd, vma, haddr);
 		mm_inc_nr_ptes(vma->vm_mm);
-		deferred_split_folio(folio, false);
+		this_cpu_write(deferred_split_reason, DSR_ZAP); deferred_split_folio(folio, false);
 		spin_unlock(vmf->ptl);
 	}
 
@@ -2136,7 +2142,7 @@ bool madvise_free_huge_pmd(struct mmu_gather *tlb, struct vm_area_struct *vma,
 	if (next - addr != HPAGE_PMD_SIZE) {
 		folio_get(folio);
 		spin_unlock(ptl);
-		split_folio(folio);
+		this_cpu_write(folio_split_reason, FSR_MADVISE); split_folio_to_list(folio, NULL);
 		folio_unlock(folio);
 		folio_put(folio);
 		goto out_unlocked;
@@ -3899,6 +3905,9 @@ out:
 	if (order == HPAGE_PMD_ORDER)
 		count_vm_event(!ret ? THP_SPLIT_PAGE : THP_SPLIT_PAGE_FAILED);
 	count_mthp_stat(order, !ret ? MTHP_STAT_SPLIT : MTHP_STAT_SPLIT_FAILED);
+	if (!ret)
+		trace_mm_folio_split(folio, new_order, ret,
+			this_cpu_read(folio_split_reason), (int)is_anon);
 	return ret;
 }
 
@@ -4090,6 +4099,8 @@ void deferred_split_folio(struct folio *folio, bool partially_mapped)
 	if (list_empty(&folio->_deferred_list)) {
 		list_add_tail(&folio->_deferred_list, &ds_queue->split_queue);
 		ds_queue->split_queue_len++;
+		trace_mm_folio_deferred_split(folio,
+			this_cpu_read(deferred_split_reason));
 #ifdef CONFIG_MEMCG
 		if (memcg)
 			set_shrinker_bit(memcg, folio_nid(folio),
@@ -4193,7 +4204,8 @@ static unsigned long deferred_split_scan(struct shrinker *shrink,
 		}
 		if (!folio_trylock(folio))
 			goto next;
-		if (!split_folio(folio)) {
+		this_cpu_write(folio_split_reason, FSR_DEFERRED);
+		if (!split_folio_to_list(folio, NULL)) {
 			did_split = true;
 			if (underused)
 				count_vm_event(THP_UNDERUSED_SPLIT_PAGE);
@@ -4281,7 +4293,8 @@ static void split_huge_pages_all(void)
 			total++;
 			folio_lock(folio);
 			nr_pages = folio_nr_pages(folio);
-			if (!split_folio(folio))
+			this_cpu_write(folio_split_reason, FSR_UNKNOWN);
+			if (!split_folio_to_list(folio, NULL))
 				split++;
 			pfn += nr_pages - 1;
 			folio_unlock(folio);

@@ -1327,6 +1327,7 @@ retry:
 					if (!folio_test_large(folio))
 						goto activate_locked_split;
 					/* Fallback to swap normal pages */
+					this_cpu_write(folio_split_reason, FSR_RECLAIM);
 					if (split_folio_to_list(folio, folio_list))
 						goto activate_locked;
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE

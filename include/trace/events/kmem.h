@@ -384,6 +384,23 @@ TRACE_EVENT(mm_calculate_totalreserve_pages,
 	TP_printk("totalreserve_pages=%lu", __entry->totalreserve_pages)
 );
 
+TRACE_EVENT(mm_split_page,
+	TP_PROTO(struct page *page, unsigned int order),
+	TP_ARGS(page, order),
+	TP_STRUCT__entry(
+		__field(unsigned long, pfn)
+		__field(unsigned int, order)
+		__field(int, migratetype)
+	),
+	TP_fast_assign(
+		__entry->pfn = page_to_pfn(page);
+		__entry->order = order;
+		__entry->migratetype = get_pageblock_migratetype(page);
+	),
+	TP_printk("pfn=0x%lx order=%u migratetype=%d",
+		__entry->pfn, __entry->order, __entry->migratetype)
+);
+
 
 /*
  * Required for uniquely and securely identifying mm in rss_stat tracepoint.

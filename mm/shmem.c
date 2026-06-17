@@ -35,6 +35,8 @@
 #include <linux/export.h>
 #include <linux/shmem_fs.h>
 #include <linux/swap.h>
+#include <linux/huge_mm.h>
+#include <linux/percpu.h>
 #include <linux/uio.h>
 #include <linux/hugetlb.h>
 #include <linux/fs_parser.h>

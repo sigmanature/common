@@ -7,6 +7,29 @@
 #include <linux/fs.h> /* only for vma_is_dax() */
 #include <linux/kobject.h>
 
+enum folio_split_reason {
+	FSR_UNKNOWN = 0,
+	FSR_RECLAIM,
+	FSR_MADVISE,
+	FSR_MIGRATION,
+	FSR_UFFD,
+	FSR_MPROTECT,
+	FSR_MREMAP,
+	FSR_SWAP,
+	FSR_TRUNCATE,
+	FSR_DEFERRED,
+};
+
+DECLARE_PER_CPU(enum folio_split_reason, folio_split_reason);
+
+enum deferred_split_reason {
+	DSR_PARTIALLY_MAPPED = 0,
+	DSR_ZAP,
+	DSR_KHUGEPAGED,
+};
+
+DECLARE_PER_CPU(enum deferred_split_reason, deferred_split_reason);
+
 vm_fault_t do_huge_pmd_anonymous_page(struct vm_fault *vmf);
 int copy_huge_pmd(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 		  pmd_t *dst_pmd, pmd_t *src_pmd, unsigned long addr,

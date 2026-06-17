@@ -69,6 +69,7 @@
 #include <linux/migrate.h>
 #include <linux/hugetlb.h>
 #include <linux/huge_mm.h>
+#include <linux/percpu.h>
 #include <linux/backing-dev.h>
 #include <linux/page_idle.h>
 #include <linux/memremap.h>

@@ -6,6 +6,8 @@
  */
 
 #include <linux/mm.h>
+#include <linux/huge_mm.h>
+#include <linux/percpu.h>
 #include <linux/sched/signal.h>
 #include <linux/pagemap.h>
 #include <linux/rmap.h>
@@ -1413,7 +1415,7 @@ retry:
 			pte_unmap(src_pte);
 			pte_unmap(dst_pte);
 			src_pte = dst_pte = NULL;
-			ret = split_folio(src_folio);
+			this_cpu_write(folio_split_reason, FSR_UFFD); ret = split_folio_to_list(src_folio, NULL);
 			if (ret)
 				goto out;
 			/* have to reacquire the folio after it got split */

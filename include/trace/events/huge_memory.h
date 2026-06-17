@@ -237,5 +237,56 @@ TRACE_EVENT(mm_khugepaged_collapse_file,
 		__print_symbolic(__entry->result, SCAN_STATUS))
 );
 
+TRACE_EVENT(mm_folio_deferred_split,
+	TP_PROTO(struct folio *folio, unsigned int reason),
+	TP_ARGS(folio, reason),
+	TP_STRUCT__entry(
+		__field(unsigned long, pfn)
+		__field(unsigned int, order)
+		__field(unsigned int, reason)
+	),
+	TP_fast_assign(
+		__entry->pfn = folio_pfn(folio);
+		__entry->order = folio_order(folio);
+		__entry->reason = reason;
+	),
+	TP_printk("pfn=0x%lx order=%u reason=%s",
+		__entry->pfn, __entry->order,
+		__print_symbolic(__entry->reason,
+			{ 0, "PARTIALLY_MAPPED" }, { 1, "ZAP" },
+			{ 2, "KHUGEPAGED" }))
+);
+
+TRACE_EVENT(mm_folio_split,
+	TP_PROTO(struct folio *folio, unsigned int new_order,
+		 int result, int reason, int is_anon),
+	TP_ARGS(folio, new_order, result, reason, is_anon),
+	TP_STRUCT__entry(
+		__field(unsigned long, pfn)
+		__field(unsigned int, order)
+		__field(unsigned int, new_order)
+		__field(int, result)
+		__field(int, reason)
+		__field(int, is_anon)
+	),
+	TP_fast_assign(
+		__entry->pfn = folio_pfn(folio);
+		__entry->order = folio_order(folio);
+		__entry->new_order = new_order;
+		__entry->result = result;
+		__entry->reason = reason;
+		__entry->is_anon = is_anon;
+	),
+	TP_printk("pfn=0x%lx order=%u new_order=%u result=%d reason=%s is_anon=%d",
+		__entry->pfn, __entry->order, __entry->new_order,
+		__entry->result,
+		__print_symbolic(__entry->reason,
+			{ 0, "UNKNOWN" }, { 1, "RECLAIM" }, { 2, "MADVISE" },
+			{ 3, "MIGRATION" }, { 4, "UFFD" }, { 5, "MPROTECT" },
+			{ 6, "MREMAP" }, { 7, "SWAP" }, { 8, "TRUNCATE" },
+		{ 9, "DEFERRED" }),
+		__entry->is_anon)
+);
+
 #endif /* __HUGE_MEMORY_H */
 #include <trace/define_trace.h>
