@@ -26,9 +26,10 @@ enum deferred_split_reason {
 	DSR_PARTIALLY_MAPPED = 0,
 	DSR_ZAP,
 	DSR_KHUGEPAGED,
+	DSR_NR,
 };
 
-DECLARE_PER_CPU(enum deferred_split_reason, deferred_split_reason);
+DECLARE_PER_CPU(unsigned long, deferred_split_reason_counts[DSR_NR]);
 
 vm_fault_t do_huge_pmd_anonymous_page(struct vm_fault *vmf);
 int copy_huge_pmd(struct mm_struct *dst_mm, struct mm_struct *src_mm,

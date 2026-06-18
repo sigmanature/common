@@ -60,6 +60,14 @@
 #include "shuffle.h"
 #include "page_reporting.h"
 
+enum alloc_fail_reason {
+	AFR_WMARK,
+	AFR_FRAGMENT,
+	AFR_NR,
+};
+
+DEFINE_PER_CPU(unsigned long, alloc_fail_counts[AFR_NR]);
+
 /* Free Page Internal flags: for internal, non-pcp variants of free_pages(). */
 typedef int __bitwise fpi_t;
 
@@ -3854,8 +3862,10 @@ check_alloc_wmark:
 				goto try_this_zone;
 
 			if (!node_reclaim_enabled() ||
-			    !zone_allows_reclaim(zonelist_zone(ac->preferred_zoneref), zone))
+			    !zone_allows_reclaim(zonelist_zone(ac->preferred_zoneref), zone)) {
+				this_cpu_inc(alloc_fail_counts[AFR_WMARK]);
 				continue;
+			}
 
 			ret = node_reclaim(zone->zone_pgdat, gfp_mask, order);
 			switch (ret) {
@@ -3890,6 +3900,7 @@ try_this_zone:
 
 			return page;
 		} else {
+			this_cpu_inc(alloc_fail_counts[AFR_FRAGMENT]);
 			if (cond_accept_memory(zone, order, alloc_flags))
 				goto try_this_zone;
 
@@ -7637,3 +7648,43 @@ struct page *alloc_pages_nolock_noprof(gfp_t gfp_flags, int nid, unsigned int or
 	return page;
 }
 EXPORT_SYMBOL_GPL(alloc_pages_nolock_noprof);
+
+#ifdef CONFIG_DEBUG_FS
+#include <linux/debugfs.h>
+#include <linux/seq_file.h>
+
+static int alloc_fail_show(struct seq_file *m, void *v)
+{
+	unsigned long totals[AFR_NR] = {0};
+	int cpu, i;
+
+	for_each_possible_cpu(cpu)
+		for (i = 0; i < AFR_NR; i++)
+			totals[i] += per_cpu(alloc_fail_counts[i], cpu);
+
+	seq_printf(m, "wmark:          %lu\n", totals[AFR_WMARK]);
+	seq_printf(m, "fragment:       %lu\n", totals[AFR_FRAGMENT]);
+	return 0;
+}
+
+static int alloc_fail_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, alloc_fail_show, NULL);
+}
+
+static const struct file_operations alloc_fail_fops = {
+	.owner = THIS_MODULE,
+	.open  = alloc_fail_open,
+	.read  = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
+static int __init alloc_fail_debugfs_init(void)
+{
+	debugfs_create_file("alloc_fail_reasons", 0400, NULL, NULL,
+			    &alloc_fail_fops);
+	return 0;
+}
+late_initcall(alloc_fail_debugfs_init);
+#endif

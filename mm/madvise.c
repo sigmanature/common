@@ -39,6 +39,7 @@
 
 #include "internal.h"
 #include "swap.h"
+#include <trace/events/huge_memory.h>
 
 #define __MADV_SET_ANON_VMA_NAME (-1)
 
@@ -868,6 +869,8 @@ static long madvise_dontneed_single_vma(struct madvise_behavior *madv_behavior)
 		.even_cows = true,
 	};
 
+	trace_mm_madvise_dontneed(madv_behavior->vma, range->start,
+				    range->end - range->start);
 	zap_page_range_single_batched(
 			madv_behavior->tlb, madv_behavior->vma, range->start,
 			range->end - range->start, &details);

@@ -288,5 +288,75 @@ TRACE_EVENT(mm_folio_split,
 		__entry->is_anon)
 );
 
+TRACE_EVENT(mm_madvise_dontneed,
+	TP_PROTO(struct vm_area_struct *vma, unsigned long start,
+		 unsigned long len),
+	TP_ARGS(vma, start, len),
+	TP_STRUCT__entry(
+		__field(unsigned long, vma_start)
+		__field(unsigned long, start)
+		__field(unsigned long, len)
+	),
+	TP_fast_assign(
+		__entry->vma_start = vma->vm_start;
+		__entry->start = start;
+		__entry->len = len;
+	),
+	TP_printk("vma=0x%lx start=0x%lx len=%lu",
+		__entry->vma_start, __entry->start, __entry->len)
+);
+
+TRACE_EVENT(mm_folio_partial_unmap,
+	TP_PROTO(struct folio *folio, struct page *page, int nr,
+		 int nr_total),
+	TP_ARGS(folio, page, nr, nr_total),
+	TP_STRUCT__entry(
+		__field(unsigned long, folio_pfn)
+		__field(unsigned long, page_pfn)
+		__field(int, nr)
+		__field(int, nr_total)
+	),
+	TP_fast_assign(
+		__entry->folio_pfn = folio_pfn(folio);
+		__entry->page_pfn = page_to_pfn(page);
+		__entry->nr = nr;
+		__entry->nr_total = nr_total;
+	),
+	TP_printk("folio=0x%lx page=0x%lx(off=%ld) nr=%d/%d",
+		__entry->folio_pfn, __entry->page_pfn,
+		(long)(__entry->page_pfn - __entry->folio_pfn),
+		__entry->nr, __entry->nr_total)
+);
+
+TRACE_EVENT(mm_shrink_partial_split,
+	TP_PROTO(struct folio *folio),
+	TP_ARGS(folio),
+	TP_STRUCT__entry(
+		__field(unsigned long, pfn)
+		__field(unsigned int, order)
+	),
+	TP_fast_assign(
+		__entry->pfn = folio_pfn(folio);
+		__entry->order = folio_order(folio);
+	),
+	TP_printk("pfn=0x%lx order=%u reason=PARTIAL_RECLAIM",
+		__entry->pfn, __entry->order)
+);
+
+TRACE_EVENT(mm_shrink_swap_split,
+	TP_PROTO(struct folio *folio),
+	TP_ARGS(folio),
+	TP_STRUCT__entry(
+		__field(unsigned long, pfn)
+		__field(unsigned int, order)
+	),
+	TP_fast_assign(
+		__entry->pfn = folio_pfn(folio);
+		__entry->order = folio_order(folio);
+	),
+	TP_printk("pfn=0x%lx order=%u reason=SWAP_FALLBACK",
+		__entry->pfn, __entry->order)
+);
+
 #endif /* __HUGE_MEMORY_H */
 #include <trace/define_trace.h>

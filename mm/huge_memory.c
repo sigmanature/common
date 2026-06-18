@@ -52,7 +52,7 @@
 #include <trace/events/huge_memory.h>
 
 DEFINE_PER_CPU(enum folio_split_reason, folio_split_reason);
-DEFINE_PER_CPU(enum deferred_split_reason, deferred_split_reason);
+DEFINE_PER_CPU(unsigned long, deferred_split_reason_counts[DSR_NR]);
 
 /*
  * By default, transparent hugepage support is disabled in order to avoid
@@ -1279,7 +1279,8 @@ static vm_fault_t __do_huge_pmd_anonymous_page(struct vm_fault *vmf)
 		pgtable_trans_huge_deposit(vma->vm_mm, vmf->pmd, pgtable);
 		map_anon_folio_pmd(folio, vmf->pmd, vma, haddr);
 		mm_inc_nr_ptes(vma->vm_mm);
-		this_cpu_write(deferred_split_reason, DSR_ZAP); deferred_split_folio(folio, false);
+		this_cpu_inc(deferred_split_reason_counts[DSR_ZAP]);
+		deferred_split_folio(folio, false);
 		spin_unlock(vmf->ptl);
 	}
 
@@ -4099,8 +4100,7 @@ void deferred_split_folio(struct folio *folio, bool partially_mapped)
 	if (list_empty(&folio->_deferred_list)) {
 		list_add_tail(&folio->_deferred_list, &ds_queue->split_queue);
 		ds_queue->split_queue_len++;
-		trace_mm_folio_deferred_split(folio,
-			this_cpu_read(deferred_split_reason));
+		trace_mm_folio_deferred_split(folio, 0);
 #ifdef CONFIG_MEMCG
 		if (memcg)
 			set_shrinker_bit(memcg, folio_nid(folio),
@@ -4586,6 +4586,34 @@ out:
 
 }
 
+static int deferred_split_reason_show(struct seq_file *m, void *v)
+{
+	unsigned long totals[DSR_NR] = {0};
+	int cpu, i;
+
+	for_each_possible_cpu(cpu)
+		for (i = 0; i < DSR_NR; i++)
+			totals[i] += per_cpu(deferred_split_reason_counts[i], cpu);
+
+	seq_printf(m, "PARTIALLY_MAPPED: %lu\n", totals[DSR_PARTIALLY_MAPPED]);
+	seq_printf(m, "ZAP:              %lu\n", totals[DSR_ZAP]);
+	seq_printf(m, "KHUGEPAGED:       %lu\n", totals[DSR_KHUGEPAGED]);
+	return 0;
+}
+
+static int deferred_split_reason_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, deferred_split_reason_show, NULL);
+}
+
+static const struct file_operations deferred_split_reason_fops = {
+	.owner	 = THIS_MODULE,
+	.open	 = deferred_split_reason_open,
+	.read	 = seq_read,
+	.llseek	 = seq_lseek,
+	.release = single_release,
+};
+
 static const struct file_operations split_huge_pages_fops = {
 	.owner	 = THIS_MODULE,
 	.write	 = split_huge_pages_write,
@@ -4595,6 +4623,8 @@ static int __init split_huge_pages_debugfs(void)
 {
 	debugfs_create_file("split_huge_pages", 0200, NULL, NULL,
 			    &split_huge_pages_fops);
+	debugfs_create_file("deferred_split_reasons", 0400, NULL, NULL,
+			    &deferred_split_reason_fops);
 	return 0;
 }
 late_initcall(split_huge_pages_debugfs);

@@ -69,6 +69,7 @@
 #include <linux/migrate.h>
 #include <linux/hugetlb.h>
 #include <linux/huge_mm.h>
+#include <trace/events/huge_memory.h>
 #include <linux/percpu.h>
 #include <linux/backing-dev.h>
 #include <linux/page_idle.h>
@@ -1760,8 +1761,11 @@ static __always_inline void __folio_remove_rmap(struct folio *folio,
 	 * Check partially_mapped first to ensure it is a large folio.
 	 */
 	if (partially_mapped && folio_test_anon(folio) &&
-	    !folio_test_partially_mapped(folio))
+	    !folio_test_partially_mapped(folio)) {
+		trace_mm_folio_partial_unmap(folio, page, nr, nr_pmdmapped);
+		this_cpu_inc(deferred_split_reason_counts[DSR_PARTIALLY_MAPPED]);
 		deferred_split_folio(folio, true);
+	}
 
 	__folio_mod_stat(folio, -nr, -nr_pmdmapped);
 

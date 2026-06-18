@@ -73,6 +73,7 @@
 #include <trace/events/vmscan.h>
 
 #undef CREATE_TRACE_POINTS
+#include <trace/events/huge_memory.h>
 #include <trace/hooks/vmscan.h>
 
 struct scan_control {
@@ -1317,9 +1318,11 @@ retry:
 					 * We can free the unmapped pages without IO.
 					 */
 					if (data_race(!list_empty(&folio->_deferred_list) &&
-					    folio_test_partially_mapped(folio)) &&
-					    split_folio_to_list(folio, folio_list))
-						goto activate_locked;
+					    folio_test_partially_mapped(folio))) {
+						trace_mm_shrink_partial_split(folio);
+						if (split_folio_to_list(folio, folio_list))
+							goto activate_locked;
+					}
 				}
 				if (folio_alloc_swap(folio, __GFP_HIGH | __GFP_NOWARN)) {
 					int __maybe_unused order = folio_order(folio);
@@ -1328,6 +1331,7 @@ retry:
 						goto activate_locked_split;
 					/* Fallback to swap normal pages */
 					this_cpu_write(folio_split_reason, FSR_RECLAIM);
+					trace_mm_shrink_swap_split(folio);
 					if (split_folio_to_list(folio, folio_list))
 						goto activate_locked;
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
