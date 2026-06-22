@@ -63,6 +63,69 @@ TRACE_EVENT(exit_mmap,
 	)
 );
 
+TRACE_EVENT(mmap_fixed_unaligned,
+	TP_PROTO(unsigned long addr, unsigned long len),
+	TP_ARGS(addr, len),
+	TP_STRUCT__entry(
+		__field(unsigned long, addr)
+		__field(unsigned long, len)
+	),
+	TP_fast_assign(
+		__entry->addr = addr;
+		__entry->len = len;
+	),
+	TP_printk("addr=0x%lx len=%lu offset=0x%lx",
+		__entry->addr, __entry->len,
+		__entry->addr & ((PAGE_SIZE << 2) - 1))
+);
+
+TRACE_EVENT(mmap_unmapped_area_unaligned,
+	TP_PROTO(unsigned long addr, unsigned long len,
+		 int start_bad, int end_bad),
+	TP_ARGS(addr, len, start_bad, end_bad),
+	TP_STRUCT__entry(
+		__field(unsigned long, addr)
+		__field(unsigned long, len)
+		__field(int, start_bad)
+		__field(int, end_bad)
+	),
+	TP_fast_assign(
+		__entry->addr = addr;
+		__entry->len = len;
+		__entry->start_bad = start_bad;
+		__entry->end_bad = end_bad;
+	),
+	TP_printk("addr=0x%lx len=%lu start_bad=%d end_bad=%d",
+		__entry->addr, __entry->len,
+		__entry->start_bad, __entry->end_bad)
+);
+
+TRACE_EVENT(dup_mmap_vma_unaligned,
+	TP_PROTO(unsigned long vm_start, unsigned long vm_end,
+		 unsigned long vm_flags, pid_t parent_pid,
+		 const char *parent_comm),
+	TP_ARGS(vm_start, vm_end, vm_flags, parent_pid, parent_comm),
+	TP_STRUCT__entry(
+		__field(unsigned long, vm_start)
+		__field(unsigned long, vm_end)
+		__field(unsigned long, vm_flags)
+		__field(pid_t, parent_pid)
+		__string(parent_comm, parent_comm)
+	),
+	TP_fast_assign(
+		__entry->vm_start = vm_start;
+		__entry->vm_end = vm_end;
+		__entry->vm_flags = vm_flags;
+		__entry->parent_pid = parent_pid;
+		__assign_str(parent_comm);
+	),
+	TP_printk("vm_start=0x%lx vm_end=0x%lx vm_flags=0x%lx parent_pid=%d parent_comm=%s start_off=0x%lx end_off=0x%lx",
+		__entry->vm_start, __entry->vm_end, __entry->vm_flags,
+		__entry->parent_pid, __get_str(parent_comm),
+		__entry->vm_start & ((PAGE_SIZE << 2) - 1),
+		__entry->vm_end & ((PAGE_SIZE << 2) - 1))
+);
+
 #endif
 
 /* This part must be outside protection */

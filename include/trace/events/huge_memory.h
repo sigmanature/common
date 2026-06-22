@@ -294,16 +294,19 @@ TRACE_EVENT(mm_madvise_dontneed,
 	TP_ARGS(vma, start, len),
 	TP_STRUCT__entry(
 		__field(unsigned long, vma_start)
+		__field(unsigned long, vma_end)
 		__field(unsigned long, start)
 		__field(unsigned long, len)
 	),
 	TP_fast_assign(
 		__entry->vma_start = vma->vm_start;
+		__entry->vma_end = vma->vm_end;
 		__entry->start = start;
 		__entry->len = len;
 	),
-	TP_printk("vma=0x%lx start=0x%lx len=%lu",
-		__entry->vma_start, __entry->start, __entry->len)
+	TP_printk("vma=0x%lx-0x%lx start=0x%lx len=%lu",
+		__entry->vma_start, __entry->vma_end,
+		__entry->start, __entry->len)
 );
 
 TRACE_EVENT(mm_folio_partial_unmap,

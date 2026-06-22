@@ -698,10 +698,13 @@ generic_get_unmapped_area(struct file *filp, unsigned long addr,
 	if (len > mmap_end - mmap_min_addr)
 		return -ENOMEM;
 
-	if (flags & MAP_FIXED)
+	if (flags & MAP_FIXED) {
+		if (!IS_ALIGNED(addr, PAGE_SIZE << 2))
+			trace_mmap_fixed_unaligned(addr, len);
 		return addr;
+	}
 
-	if (addr) {
+	if (addr && IS_ALIGNED(addr, PAGE_SIZE << 2)) {
 		addr = PAGE_ALIGN(addr);
 		vma = find_vma_prev(mm, addr, &prev);
 		if (mmap_end - len >= addr && addr >= mmap_min_addr &&
@@ -713,10 +716,18 @@ generic_get_unmapped_area(struct file *filp, unsigned long addr,
 	info.length = len;
 	info.low_limit = mm->mmap_base;
 	info.high_limit = mmap_end;
+	info.align_mask = (PAGE_SIZE << 2) - 1;
 	info.start_gap = stack_guard_placement(vm_flags);
 	if (filp && is_file_hugepages(filp))
 		info.align_mask = huge_page_mask_align(filp);
-	return vm_unmapped_area(&info);
+	addr = vm_unmapped_area(&info);
+	if (!IS_ERR_VALUE(addr) &&
+	    (!IS_ALIGNED(addr, PAGE_SIZE << 2) ||
+	     !IS_ALIGNED(addr + len, PAGE_SIZE << 2)))
+		trace_mmap_unmapped_area_unaligned(addr, len,
+			!IS_ALIGNED(addr, PAGE_SIZE << 2),
+			!IS_ALIGNED(addr + len, PAGE_SIZE << 2));
+	return addr;
 }
 
 #ifndef HAVE_ARCH_UNMAPPED_AREA
@@ -748,11 +759,14 @@ generic_get_unmapped_area_topdown(struct file *filp, unsigned long addr,
 	if (len > mmap_end - mmap_min_addr)
 		return -ENOMEM;
 
-	if (flags & MAP_FIXED)
+	if (flags & MAP_FIXED) {
+		if (!IS_ALIGNED(addr, PAGE_SIZE << 2))
+			trace_mmap_fixed_unaligned(addr, len);
 		return addr;
+	}
 
 	/* requesting a specific address */
-	if (addr) {
+	if (addr && IS_ALIGNED(addr, PAGE_SIZE << 2)) {
 		addr = PAGE_ALIGN(addr);
 		vma = find_vma_prev(mm, addr, &prev);
 		if (mmap_end - len >= addr && addr >= mmap_min_addr &&
@@ -765,6 +779,7 @@ generic_get_unmapped_area_topdown(struct file *filp, unsigned long addr,
 	info.length = len;
 	info.low_limit = PAGE_SIZE;
 	info.high_limit = arch_get_mmap_base(addr, mm->mmap_base);
+	info.align_mask = (PAGE_SIZE << 2) - 1;
 	info.start_gap = stack_guard_placement(vm_flags);
 	if (filp && is_file_hugepages(filp))
 		info.align_mask = huge_page_mask_align(filp);
@@ -783,6 +798,13 @@ generic_get_unmapped_area_topdown(struct file *filp, unsigned long addr,
 		info.high_limit = mmap_end;
 		addr = vm_unmapped_area(&info);
 	}
+
+	if (!IS_ERR_VALUE(addr) &&
+	    (!IS_ALIGNED(addr, PAGE_SIZE << 2) ||
+	     !IS_ALIGNED(addr + len, PAGE_SIZE << 2)))
+		trace_mmap_unmapped_area_unaligned(addr, len,
+			!IS_ALIGNED(addr, PAGE_SIZE << 2),
+			!IS_ALIGNED(addr + len, PAGE_SIZE << 2));
 
 	return addr;
 }
@@ -1787,6 +1809,15 @@ __latent_entropy int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
 		if (retval)
 			goto fail_nomem_policy;
 		tmp->vm_mm = mm;
+		if (!IS_ALIGNED(tmp->vm_start, PAGE_SIZE << 2) ||
+		    !IS_ALIGNED(tmp->vm_end, PAGE_SIZE << 2)) {
+			struct task_struct *parent = rcu_access_pointer(current->real_parent);
+
+			trace_dup_mmap_vma_unaligned(tmp->vm_start, tmp->vm_end,
+						     tmp->vm_flags,
+						     parent ? parent->pid : -1,
+						     parent ? parent->comm : "<null>");
+		}
 		retval = dup_userfaultfd(tmp, &uf);
 		if (retval)
 			goto fail_nomem_anon_vma_fork;

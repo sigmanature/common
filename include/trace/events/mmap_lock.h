@@ -73,6 +73,7 @@ TRACE_EVENT(mmap_lock_acquire_returned,
 	)
 );
 
+
 #endif /* _TRACE_MMAP_LOCK_H */
 
 /* This part must be outside protection */
