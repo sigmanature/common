@@ -67,6 +67,7 @@ enum alloc_fail_reason {
 };
 
 DEFINE_PER_CPU(unsigned long, alloc_fail_counts[AFR_NR]);
+DEFINE_PER_CPU(int, last_alloc_fail_reason);
 
 /* Free Page Internal flags: for internal, non-pcp variants of free_pages(). */
 typedef int __bitwise fpi_t;
@@ -3863,7 +3864,7 @@ check_alloc_wmark:
 
 			if (!node_reclaim_enabled() ||
 			    !zone_allows_reclaim(zonelist_zone(ac->preferred_zoneref), zone)) {
-				this_cpu_inc(alloc_fail_counts[AFR_WMARK]);
+				this_cpu_write(last_alloc_fail_reason, AFR_WMARK);
 				continue;
 			}
 
@@ -3900,7 +3901,7 @@ try_this_zone:
 
 			return page;
 		} else {
-			this_cpu_inc(alloc_fail_counts[AFR_FRAGMENT]);
+			this_cpu_write(last_alloc_fail_reason, AFR_FRAGMENT);
 			if (cond_accept_memory(zone, order, alloc_flags))
 				goto try_this_zone;
 
@@ -4822,6 +4823,7 @@ retry:
 		goto nopage;
 
 	/* Try direct reclaim and then allocating */
+	this_cpu_inc(alloc_fail_counts[this_cpu_read(last_alloc_fail_reason)]);
 	page = __alloc_pages_direct_reclaim(gfp_mask, order, alloc_flags, ac,
 							&did_some_progress);
 	if (page)

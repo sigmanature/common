@@ -3907,7 +3907,7 @@ out:
 		count_vm_event(!ret ? THP_SPLIT_PAGE : THP_SPLIT_PAGE_FAILED);
 	count_mthp_stat(order, !ret ? MTHP_STAT_SPLIT : MTHP_STAT_SPLIT_FAILED);
 	if (!ret)
-		trace_mm_folio_split(folio, new_order, ret,
+		trace_mm_folio_split(folio, order, new_order, ret,
 			this_cpu_read(folio_split_reason), (int)is_anon);
 	return ret;
 }
