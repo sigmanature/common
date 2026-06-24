@@ -17,14 +17,14 @@ TRACE_EVENT(alloc_stall_lowwatermark,
 	TP_ARGS(zone, order, mark, free_pages, alloc_flags),
 
 	TP_STRUCT__entry(
-		__field(	int,		node_id		)
-		__string(	name,		zone->name	)
-		__field(	unsigned int,	order		)
-		__field(	unsigned long,	mark		)
-		__field(	long,		free_pages	)
-		__field(	unsigned long,	gfp_flags	)
-		__field(	pid_t,		pid		)
-		__array(	char,		comm,	TASK_COMM_LEN	)
+		__field(int,		node_id		)
+		__string(name,		zone->name	)
+		__field(unsigned int,	order		)
+		__field(unsigned long,	mark		)
+		__field(long,		free_pages	)
+		__field(unsigned long,	gfp_flags	)
+		__field(pid_t,		pid		)
+		__array(char,		comm,	TASK_COMM_LEN	)
 	),
 
 	TP_fast_assign(
@@ -39,14 +39,9 @@ TRACE_EVENT(alloc_stall_lowwatermark,
 	),
 
 	TP_printk("node=%d zone=%s order=%u mark=%lu free=%ld gfp_flags=%#lx pid=%d comm=%s",
-		__entry->node_id,
-		__get_str(name),
-		__entry->order,
-		__entry->mark,
-		__entry->free_pages,
-		__entry->gfp_flags,
-		__entry->pid,
-		__entry->comm)
+		__entry->node_id, __get_str(name), __entry->order,
+		__entry->mark, __entry->free_pages,
+		__entry->gfp_flags, __entry->pid, __entry->comm)
 );
 
 TRACE_EVENT(alloc_stall_fragment,
@@ -57,12 +52,12 @@ TRACE_EVENT(alloc_stall_fragment,
 	TP_ARGS(zone, order, alloc_flags),
 
 	TP_STRUCT__entry(
-		__field(	int,		node_id		)
-		__string(	name,		zone->name	)
-		__field(	unsigned int,	order		)
-		__field(	unsigned long,	gfp_flags	)
-		__field(	pid_t,		pid		)
-		__array(	char,		comm,	TASK_COMM_LEN	)
+		__field(int,		node_id		)
+		__string(name,		zone->name	)
+		__field(unsigned int,	order		)
+		__field(unsigned long,	gfp_flags	)
+		__field(pid_t,		pid		)
+		__array(char,		comm,	TASK_COMM_LEN	)
 	),
 
 	TP_fast_assign(
@@ -75,12 +70,33 @@ TRACE_EVENT(alloc_stall_fragment,
 	),
 
 	TP_printk("node=%d zone=%s order=%u gfp_flags=%#lx pid=%d comm=%s",
-		__entry->node_id,
-		__get_str(name),
-		__entry->order,
-		__entry->gfp_flags,
-		__entry->pid,
-		__entry->comm)
+		__entry->node_id, __get_str(name), __entry->order,
+		__entry->gfp_flags, __entry->pid, __entry->comm)
+);
+
+TRACE_EVENT(direct_reclaim,
+
+	TP_PROTO(unsigned int order, gfp_t gfp_mask),
+
+	TP_ARGS(order, gfp_mask),
+
+	TP_STRUCT__entry(
+		__field(unsigned int,	order		)
+		__field(unsigned long,	gfp_flags	)
+		__field(pid_t,		pid		)
+		__array(char,		comm,	TASK_COMM_LEN	)
+	),
+
+	TP_fast_assign(
+		__entry->order		= order;
+		__entry->gfp_flags	= gfp_mask;
+		__entry->pid		= current->pid;
+		memcpy(__entry->comm, current->comm, TASK_COMM_LEN);
+	),
+
+	TP_printk("order=%u gfp_flags=%#lx pid=%d comm=%s",
+		__entry->order, __entry->gfp_flags,
+		__entry->pid, __entry->comm)
 );
 
 #endif /* _TRACE_PAGE_ALLOC_H */

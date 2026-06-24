@@ -29,6 +29,7 @@
 #include <linux/buffer_head.h>	/* for buffer_heads_over_limit */
 #include <linux/mm_inline.h>
 #include <linux/backing-dev.h>
+#include <trace/events/page_alloc.h>
 #include <linux/rmap.h>
 #include <linux/topology.h>
 #include <linux/cpu.h>
@@ -6401,8 +6402,10 @@ static unsigned long do_try_to_free_pages(struct zonelist *zonelist,
 retry:
 	delayacct_freepages_start();
 
-	if (!cgroup_reclaim(sc))
+	if (!cgroup_reclaim(sc)) {
+		trace_direct_reclaim(sc->order, sc->gfp_mask);
 		__count_zid_vm_events(ALLOCSTALL, sc->reclaim_idx, 1);
+	}
 
 	do {
 		if (!sc->proactive)

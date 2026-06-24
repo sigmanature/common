@@ -41,6 +41,7 @@
 #include <trace/events/kmem.h>
 #include <trace/events/oom.h>
 #include <trace/events/page_alloc.h>
+#include <trace/events/page_alloc.h>
 #include <linux/prefetch.h>
 #include <linux/mm_inline.h>
 #include <linux/mmu_notifier.h>
@@ -3574,11 +3575,11 @@ bool __zone_watermark_ok_raw(struct zone *z, unsigned int order, unsigned long m
 	 * even if a suitable page happened to be free.
 	 */
 	if (free_pages <= min + z->lowmem_reserve[highest_zoneidx]) {
-		if (direct_reclaim) {
+		
 			trace_alloc_stall_lowwatermark(z, order, min, free_pages,
 						       alloc_flags);
 			this_cpu_write(last_alloc_fail_reason, AFR_WMARK);
-		}
+		
 		return false;
 	}
 
@@ -3610,10 +3611,10 @@ bool __zone_watermark_ok_raw(struct zone *z, unsigned int order, unsigned long m
 			return true;
 		}
 	}
-	if (direct_reclaim) {
-		trace_alloc_stall_fragment(z, order, alloc_flags);
-		this_cpu_write(last_alloc_fail_reason, AFR_FRAGMENT);
-	}
+	
+	trace_alloc_stall_fragment(z, order, alloc_flags);
+	this_cpu_write(last_alloc_fail_reason, AFR_FRAGMENT);
+	
 	return false;
 }
 
