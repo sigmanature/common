@@ -1540,12 +1540,16 @@ static inline unsigned long pgdat_end_pfn(pg_data_t *pgdat)
 void build_all_zonelists(pg_data_t *pgdat);
 void wakeup_kswapd(struct zone *zone, gfp_t gfp_mask, int order,
 		   enum zone_type highest_zoneidx);
-bool __zone_watermark_ok(struct zone *z, unsigned int order, unsigned long mark,
-			 int highest_zoneidx, unsigned int alloc_flags,
-			 long free_pages);
-bool zone_watermark_ok(struct zone *z, unsigned int order,
+bool __zone_watermark_ok_raw(struct zone *z, unsigned int order, unsigned long mark,
+			      int highest_zoneidx, unsigned int alloc_flags,
+			      long free_pages, bool direct_reclaim);
+#define __zone_watermark_ok(z, order, mark, hz, af, fp) \
+	__zone_watermark_ok_raw(z, order, mark, hz, af, fp, false)
+bool zone_watermark_ok_raw(struct zone *z, unsigned int order,
 		unsigned long mark, int highest_zoneidx,
-		unsigned int alloc_flags);
+		unsigned int alloc_flags, bool direct_reclaim);
+#define zone_watermark_ok(z, o, m, hz, af) \
+	zone_watermark_ok_raw(z, o, m, hz, af, false)
 /*
  * Memory initialization context, use to differentiate memory added by
  * the platform statically or via memory hotplug interface.

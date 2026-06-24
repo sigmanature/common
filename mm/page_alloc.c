@@ -40,6 +40,7 @@
 #include <linux/compaction.h>
 #include <trace/events/kmem.h>
 #include <trace/events/oom.h>
+#include <trace/events/page_alloc.h>
 #include <linux/prefetch.h>
 #include <linux/mm_inline.h>
 #include <linux/mmu_notifier.h>
@@ -3528,9 +3529,9 @@ static inline long __zone_watermark_unusable_free(struct zone *z,
  * one free page of a suitable size. Checking now avoids taking the zone lock
  * to check in the allocation paths if no pages are free.
  */
-bool __zone_watermark_ok(struct zone *z, unsigned int order, unsigned long mark,
+bool __zone_watermark_ok_raw(struct zone *z, unsigned int order, unsigned long mark,
 			 int highest_zoneidx, unsigned int alloc_flags,
-			 long free_pages)
+			 long free_pages, bool direct_reclaim)
 {
 	long min = mark;
 	int o;
@@ -3572,8 +3573,14 @@ bool __zone_watermark_ok(struct zone *z, unsigned int order, unsigned long mark,
 	 * are not met, then a high-order request also cannot go ahead
 	 * even if a suitable page happened to be free.
 	 */
-	if (free_pages <= min + z->lowmem_reserve[highest_zoneidx])
+	if (free_pages <= min + z->lowmem_reserve[highest_zoneidx]) {
+		if (direct_reclaim) {
+			trace_alloc_stall_lowwatermark(z, order, min, free_pages,
+						       alloc_flags);
+			this_cpu_write(last_alloc_fail_reason, AFR_WMARK);
+		}
 		return false;
+	}
 
 	/* If this is an order-0 request then the watermark is fine */
 	if (!order)
@@ -3603,14 +3610,19 @@ bool __zone_watermark_ok(struct zone *z, unsigned int order, unsigned long mark,
 			return true;
 		}
 	}
+	if (direct_reclaim) {
+		trace_alloc_stall_fragment(z, order, alloc_flags);
+		this_cpu_write(last_alloc_fail_reason, AFR_FRAGMENT);
+	}
 	return false;
 }
 
-bool zone_watermark_ok(struct zone *z, unsigned int order, unsigned long mark,
-		      int highest_zoneidx, unsigned int alloc_flags)
+bool zone_watermark_ok_raw(struct zone *z, unsigned int order, unsigned long mark,
+		      int highest_zoneidx, unsigned int alloc_flags,
+		      bool direct_reclaim)
 {
-	return __zone_watermark_ok(z, order, mark, highest_zoneidx, alloc_flags,
-					zone_page_state(z, NR_FREE_PAGES));
+	return __zone_watermark_ok_raw(z, order, mark, highest_zoneidx, alloc_flags,
+					zone_page_state(z, NR_FREE_PAGES), direct_reclaim);
 }
 
 static inline bool zone_watermark_fast(struct zone *z, unsigned int order,
@@ -3734,8 +3746,9 @@ static inline unsigned int gfp_to_alloc_flags_cma(gfp_t gfp_mask,
  * a page.
  */
 static struct page *
-get_page_from_freelist(gfp_t gfp_mask, unsigned int order, int alloc_flags,
-						const struct alloc_context *ac)
+get_page_from_freelist_raw(gfp_t gfp_mask, unsigned int order, int alloc_flags,
+						const struct alloc_context *ac,
+						bool direct_reclaim)
 {
 	struct zoneref *z;
 	struct zone *zone;
@@ -3878,8 +3891,8 @@ check_alloc_wmark:
 				continue;
 			default:
 				/* did we reclaim enough */
-				if (zone_watermark_ok(zone, order, mark,
-					ac->highest_zoneidx, alloc_flags))
+				if (zone_watermark_ok_raw(zone, order, mark,
+					ac->highest_zoneidx, alloc_flags, direct_reclaim))
 					goto try_this_zone;
 
 				continue;
@@ -3901,7 +3914,6 @@ try_this_zone:
 
 			return page;
 		} else {
-			this_cpu_write(last_alloc_fail_reason, AFR_FRAGMENT);
 			if (cond_accept_memory(zone, order, alloc_flags))
 				goto try_this_zone;
 
@@ -3933,6 +3945,9 @@ try_this_zone:
 
 	return NULL;
 }
+
+#define get_page_from_freelist(gfp, o, af, ac) \
+	get_page_from_freelist_raw(gfp, o, af, ac, false)
 
 static void warn_alloc_show_mem(gfp_t gfp_mask, nodemask_t *nodemask)
 {
@@ -4810,7 +4825,7 @@ retry:
 	}
 
 	/* Attempt with potentially adjusted zonelist and alloc_flags */
-	page = get_page_from_freelist(gfp_mask, order, alloc_flags, ac);
+	page = get_page_from_freelist_raw(gfp_mask, order, alloc_flags, ac, true);
 	if (page)
 		goto got_pg;
 
@@ -7690,3 +7705,6 @@ static int __init alloc_fail_debugfs_init(void)
 }
 late_initcall(alloc_fail_debugfs_init);
 #endif
+
+#define CREATE_TRACE_POINTS
+#include <trace/events/page_alloc.h>

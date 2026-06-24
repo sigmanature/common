@@ -258,9 +258,9 @@ TRACE_EVENT(mm_folio_deferred_split,
 );
 
 TRACE_EVENT(mm_folio_split,
-	TP_PROTO(struct folio *folio, unsigned int new_order,
-		 int result, int reason, int is_anon),
-	TP_ARGS(folio, new_order, result, reason, is_anon),
+	TP_PROTO(struct folio *folio, unsigned int order,
+		 unsigned int new_order, int result, int reason, int is_anon),
+	TP_ARGS(folio, order, new_order, result, reason, is_anon),
 	TP_STRUCT__entry(
 		__field(unsigned long, pfn)
 		__field(unsigned int, order)
@@ -271,7 +271,7 @@ TRACE_EVENT(mm_folio_split,
 	),
 	TP_fast_assign(
 		__entry->pfn = folio_pfn(folio);
-		__entry->order = folio_order(folio);
+		__entry->order = order;
 		__entry->new_order = new_order;
 		__entry->result = result;
 		__entry->reason = reason;
