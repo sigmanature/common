@@ -3580,7 +3580,6 @@ bool __zone_watermark_ok_raw(struct zone *z, unsigned int order, unsigned long m
 						       alloc_flags);
 			this_cpu_write(last_alloc_fail_reason, AFR_WMARK);
 		}
-
 		return false;
 	}
 
@@ -3612,6 +3611,10 @@ bool __zone_watermark_ok_raw(struct zone *z, unsigned int order, unsigned long m
 			return true;
 		}
 	}
+<<<<<<< Updated upstream
+=======
+	
+>>>>>>> Stashed changes
 	if(direct_reclaim) {
 		trace_alloc_stall_fragment(z, order, alloc_flags);
 		this_cpu_write(last_alloc_fail_reason, AFR_FRAGMENT);
@@ -3627,9 +3630,10 @@ bool zone_watermark_ok_raw(struct zone *z, unsigned int order, unsigned long mar
 					zone_page_state(z, NR_FREE_PAGES), direct_reclaim);
 }
 
-static inline bool zone_watermark_fast(struct zone *z, unsigned int order,
+static inline bool zone_watermark_fast_raw(struct zone *z, unsigned int order,
 				unsigned long mark, int highest_zoneidx,
-				unsigned int alloc_flags, gfp_t gfp_mask)
+				unsigned int alloc_flags, gfp_t gfp_mask,
+				bool direct_reclaim)
 {
 	long free_pages;
 
@@ -3652,8 +3656,8 @@ static inline bool zone_watermark_fast(struct zone *z, unsigned int order,
 			return true;
 	}
 
-	if (__zone_watermark_ok(z, order, mark, highest_zoneidx, alloc_flags,
-					free_pages))
+	if (__zone_watermark_ok_raw(z, order, mark, highest_zoneidx, alloc_flags,
+				free_pages, direct_reclaim))
 		return true;
 
 	/*
@@ -3665,12 +3669,15 @@ static inline bool zone_watermark_fast(struct zone *z, unsigned int order,
 	if (unlikely(!order && (alloc_flags & ALLOC_MIN_RESERVE) && z->watermark_boost
 		&& ((alloc_flags & ALLOC_WMARK_MASK) == WMARK_MIN))) {
 		mark = z->_watermark[WMARK_MIN];
-		return __zone_watermark_ok(z, order, mark, highest_zoneidx,
-					alloc_flags, free_pages);
+		return __zone_watermark_ok_raw(z, order, mark, highest_zoneidx,
+					alloc_flags, free_pages, direct_reclaim);
 	}
 
 	return false;
 }
+
+#define zone_watermark_fast(z, o, m, hz, af, gfp) \
+	zone_watermark_fast_raw(z, o, m, hz, af, gfp, false)
 
 #ifdef CONFIG_NUMA
 int __read_mostly node_reclaim_distance = RECLAIM_DISTANCE;
@@ -3856,9 +3863,9 @@ retry:
 
 check_alloc_wmark:
 		mark = wmark_pages(zone, alloc_flags & ALLOC_WMARK_MASK);
-		if (!zone_watermark_fast(zone, order, mark,
+		if (!zone_watermark_fast_raw(zone, order, mark,
 				       ac->highest_zoneidx, alloc_flags,
-				       gfp_mask)) {
+				       gfp_mask, direct_reclaim)) {
 			int ret;
 
 			if (cond_accept_memory(zone, order, alloc_flags))
@@ -3879,7 +3886,6 @@ check_alloc_wmark:
 
 			if (!node_reclaim_enabled() ||
 			    !zone_allows_reclaim(zonelist_zone(ac->preferred_zoneref), zone)) {
-				this_cpu_write(last_alloc_fail_reason, AFR_WMARK);
 				continue;
 			}
 
@@ -3893,8 +3899,8 @@ check_alloc_wmark:
 				continue;
 			default:
 				/* did we reclaim enough */
-				if (zone_watermark_ok_raw(zone, order, mark,
-					ac->highest_zoneidx, alloc_flags, direct_reclaim))
+				if (zone_watermark_ok(zone, order, mark,
+					ac->highest_zoneidx, alloc_flags))
 					goto try_this_zone;
 
 				continue;
