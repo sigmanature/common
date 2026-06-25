@@ -16,6 +16,14 @@
 
 #include <linux/types.h>
 
+enum zsmalloc_type {
+	ZSMALLOC_TYPE_BASEPAGE,
+#ifdef CONFIG_ZSMALLOC_MULTI_PAGES
+	ZSMALLOC_TYPE_MULTI_PAGES,
+#endif
+	ZSMALLOC_TYPE_MAX,
+};
+
 struct zs_pool_stats {
 	/* How many pages were migrated (freed) */
 	atomic_long_t pages_compacted;
@@ -30,9 +38,12 @@ unsigned long zs_malloc(struct zs_pool *pool, size_t size, gfp_t flags,
 			const int nid);
 void zs_free(struct zs_pool *pool, unsigned long obj);
 
-size_t zs_huge_class_size(struct zs_pool *pool);
+size_t zs_huge_class_size(struct zs_pool *pool, enum zsmalloc_type type);
 
 unsigned long zs_get_total_pages(struct zs_pool *pool);
+#ifdef CONFIG_ZSMALLOC_MULTI_PAGES
+unsigned long zs_get_multi_pages_zpdescs(struct zs_pool *pool);
+#endif
 unsigned long zs_compact(struct zs_pool *pool);
 
 unsigned int zs_lookup_class_index(struct zs_pool *pool, unsigned int size);

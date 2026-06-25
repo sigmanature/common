@@ -159,6 +159,23 @@ config ZSMALLOC_CHAIN_SIZE
 
 	  For more information, see zsmalloc documentation.
 
+config ZSMALLOC_MULTI_PAGES
+	bool "Support objects compressed based on multiple pages"
+	depends on ZSMALLOC
+	help
+	  Enable zsmalloc to allocate objects larger than PAGE_SIZE. This
+	  supports zram compression at a larger granularity than a single base
+	  page.
+
+config ZSMALLOC_MULTI_PAGES_ORDER
+	int "Multi-page zsmalloc allocation order"
+	default 2
+	range 1 4
+	depends on ZSMALLOC_MULTI_PAGES
+	help
+	  Order used for multi-page zsmalloc objects. The default order 2
+	  allows zram to compress four base pages as one object.
+
 endmenu
 
 endif
