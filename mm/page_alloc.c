@@ -3575,11 +3575,12 @@ bool __zone_watermark_ok_raw(struct zone *z, unsigned int order, unsigned long m
 	 * even if a suitable page happened to be free.
 	 */
 	if (free_pages <= min + z->lowmem_reserve[highest_zoneidx]) {
-		
+		if(direct_reclaim) {
 			trace_alloc_stall_lowwatermark(z, order, min, free_pages,
 						       alloc_flags);
 			this_cpu_write(last_alloc_fail_reason, AFR_WMARK);
-		
+		}
+
 		return false;
 	}
 
@@ -3611,10 +3612,10 @@ bool __zone_watermark_ok_raw(struct zone *z, unsigned int order, unsigned long m
 			return true;
 		}
 	}
-	
-	trace_alloc_stall_fragment(z, order, alloc_flags);
-	this_cpu_write(last_alloc_fail_reason, AFR_FRAGMENT);
-	
+	if(direct_reclaim) {
+		trace_alloc_stall_fragment(z, order, alloc_flags);
+		this_cpu_write(last_alloc_fail_reason, AFR_FRAGMENT);
+	}
 	return false;
 }
 
