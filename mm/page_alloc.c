@@ -3611,10 +3611,6 @@ bool __zone_watermark_ok_raw(struct zone *z, unsigned int order, unsigned long m
 			return true;
 		}
 	}
-<<<<<<< Updated upstream
-=======
-	
->>>>>>> Stashed changes
 	if(direct_reclaim) {
 		trace_alloc_stall_fragment(z, order, alloc_flags);
 		this_cpu_write(last_alloc_fail_reason, AFR_FRAGMENT);
