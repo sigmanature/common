@@ -685,6 +685,15 @@ EXPORT_SYMBOL_GPL(vm_unmapped_area);
  *
  * This function "knows" that -ENOMEM has the bits set.
  */
+static inline int mmap_fixed_vma_type(struct file *filp, unsigned long flags)
+{
+	if (!filp)
+		return (flags & MAP_SHARED) ? MMAP_VMA_TYPE_SHMEM : MMAP_VMA_TYPE_ANON;
+	if (shmem_mapping(filp->f_mapping))
+		return MMAP_VMA_TYPE_SHMEM;
+	return MMAP_VMA_TYPE_FILE;
+}
+
 unsigned long
 generic_get_unmapped_area(struct file *filp, unsigned long addr,
 			  unsigned long len, unsigned long pgoff,
@@ -694,13 +703,17 @@ generic_get_unmapped_area(struct file *filp, unsigned long addr,
 	struct vm_area_struct *vma, *prev;
 	struct vm_unmapped_area_info info = {};
 	const unsigned long mmap_end = arch_get_mmap_end(addr, len, flags);
+	int vma_type;
 
 	if (len > mmap_end - mmap_min_addr)
 		return -ENOMEM;
 
 	if (flags & MAP_FIXED) {
-		if (!IS_ALIGNED(addr, PAGE_SIZE << 2))
-			trace_mmap_fixed_unaligned(addr, len);
+		if (!IS_ALIGNED(addr, PAGE_SIZE << 2)) {
+			vma_type = mmap_fixed_vma_type(filp, flags);
+			if (vma_type != MMAP_VMA_TYPE_FILE)
+				trace_mmap_fixed_unaligned(addr, len, vma_type);
+		}
 		return addr;
 	}
 
@@ -754,14 +767,18 @@ generic_get_unmapped_area_topdown(struct file *filp, unsigned long addr,
 	struct mm_struct *mm = current->mm;
 	struct vm_unmapped_area_info info = {};
 	const unsigned long mmap_end = arch_get_mmap_end(addr, len, flags);
+	int vma_type;
 
 	/* requested length too big for entire address space */
 	if (len > mmap_end - mmap_min_addr)
 		return -ENOMEM;
 
 	if (flags & MAP_FIXED) {
-		if (!IS_ALIGNED(addr, PAGE_SIZE << 2))
-			trace_mmap_fixed_unaligned(addr, len);
+		if (!IS_ALIGNED(addr, PAGE_SIZE << 2)) {
+			vma_type = mmap_fixed_vma_type(filp, flags);
+			if (vma_type != MMAP_VMA_TYPE_FILE)
+				trace_mmap_fixed_unaligned(addr, len, vma_type);
+		}
 		return addr;
 	}
 

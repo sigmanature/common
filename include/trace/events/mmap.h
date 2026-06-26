@@ -7,6 +7,16 @@
 
 #include <linux/tracepoint.h>
 
+#define MMAP_VMA_TYPE_ANON	0
+#define MMAP_VMA_TYPE_SHMEM	1
+#define MMAP_VMA_TYPE_FILE	2
+
+#define show_mmap_vma_type(type)					\
+	__print_symbolic(type,						\
+		{ MMAP_VMA_TYPE_ANON,	"anon" },			\
+		{ MMAP_VMA_TYPE_SHMEM,	"shmem" },			\
+		{ MMAP_VMA_TYPE_FILE,	"file" })
+
 TRACE_EVENT(vm_unmapped_area,
 
 	TP_PROTO(unsigned long addr, struct vm_unmapped_area_info *info),
@@ -64,18 +74,21 @@ TRACE_EVENT(exit_mmap,
 );
 
 TRACE_EVENT(mmap_fixed_unaligned,
-	TP_PROTO(unsigned long addr, unsigned long len),
-	TP_ARGS(addr, len),
+	TP_PROTO(unsigned long addr, unsigned long len, int vma_type),
+	TP_ARGS(addr, len, vma_type),
 	TP_STRUCT__entry(
 		__field(unsigned long, addr)
 		__field(unsigned long, len)
+		__field(int, vma_type)
 	),
 	TP_fast_assign(
 		__entry->addr = addr;
 		__entry->len = len;
+		__entry->vma_type = vma_type;
 	),
-	TP_printk("addr=0x%lx len=%lu offset=0x%lx",
+	TP_printk("addr=0x%lx len=%lu vma_type=%s offset=0x%lx",
 		__entry->addr, __entry->len,
+		show_mmap_vma_type(__entry->vma_type),
 		__entry->addr & ((PAGE_SIZE << 2) - 1))
 );
 
