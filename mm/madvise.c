@@ -133,6 +133,54 @@ static int replace_anon_vma_name(struct vm_area_struct *vma,
 	if (anon_vma_name_eq(orig_name, anon_name))
 		return 0;
 
+	/*
+	 * If the original name is our auto-generated debug name, preserve it
+	 * by appending to the new user-set name.  Format: "user_name (debug_info)".
+	 */
+	if (orig_name &&
+	    (!strncmp(orig_name->name, "MAP_FIXED:", 10) ||
+	     !strncmp(orig_name->name, "non_MAP_FIXED:", 14) ||
+	     !strncmp(orig_name->name, "brk:", 4))) {
+		char combined[128];
+		struct anon_vma_name *combined_name;
+
+		snprintf(combined, sizeof(combined), "%s (%s)",
+			 anon_name->name, orig_name->name);
+		combined_name = anon_vma_name_alloc(combined);
+		if (combined_name) {
+			vma->anon_name = combined_name;
+			anon_vma_name_put(orig_name);
+			return 0;
+		}
+	}
+
+	/*
+	 * If orig_name is already a combined name (user set "foo" on a
+	 * debug-named VMA), extract the debug part and re-attach it.
+	 */
+	if (orig_name) {
+		const char *debug = NULL;
+
+		debug = strstr(orig_name->name, " (MAP_FIXED:");
+		if (!debug)
+			debug = strstr(orig_name->name, " (non_MAP_FIXED:");
+		if (!debug)
+			debug = strstr(orig_name->name, " (brk:");
+		if (debug) {
+			char combined[128];
+			struct anon_vma_name *combined_name;
+
+			snprintf(combined, sizeof(combined), "%s%s",
+				 anon_name->name, debug);
+			combined_name = anon_vma_name_alloc(combined);
+			if (combined_name) {
+				vma->anon_name = combined_name;
+				anon_vma_name_put(orig_name);
+				return 0;
+			}
+		}
+	}
+
 	vma->anon_name = anon_vma_name_reuse(anon_name);
 	anon_vma_name_put(orig_name);
 
