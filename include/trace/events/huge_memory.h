@@ -238,23 +238,46 @@ TRACE_EVENT(mm_khugepaged_collapse_file,
 );
 
 TRACE_EVENT(mm_folio_deferred_split,
-	TP_PROTO(struct folio *folio, unsigned int reason),
-	TP_ARGS(folio, reason),
+	TP_PROTO(struct folio *folio, unsigned int reason,
+		 struct vm_area_struct *vma),
+	TP_ARGS(folio, reason, vma),
 	TP_STRUCT__entry(
 		__field(unsigned long, pfn)
 		__field(unsigned int, order)
 		__field(unsigned int, reason)
+		__field(pid_t, pid)
+		__field(pid_t, tgid)
+		__array(char, comm, TASK_COMM_LEN)
+		__array(char, leader_comm, TASK_COMM_LEN)
+		__field(unsigned long, mm)
+		__field(unsigned long, vma_start)
+		__field(unsigned long, vma_end)
+		__string(vma_name, vma && anon_vma_name(vma) ?
+			 anon_vma_name(vma)->name : "")
 	),
 	TP_fast_assign(
 		__entry->pfn = folio_pfn(folio);
 		__entry->order = folio_order(folio);
 		__entry->reason = reason;
+		__entry->pid = current->pid;
+		__entry->tgid = current->tgid;
+		memcpy(__entry->comm, current->comm, TASK_COMM_LEN);
+		memcpy(__entry->leader_comm,
+		       current->group_leader ? current->group_leader->comm :
+		       current->comm, TASK_COMM_LEN);
+		__entry->mm = (unsigned long)(vma ? vma->vm_mm : current->mm);
+		__entry->vma_start = vma ? vma->vm_start : 0;
+		__entry->vma_end = vma ? vma->vm_end : 0;
+		__assign_str(vma_name);
 	),
-	TP_printk("pfn=0x%lx order=%u reason=%s",
+	TP_printk("pfn=0x%lx order=%u reason=%s pid=%d tgid=%d comm=%s leader_comm=%s mm=0x%lx vma=[0x%lx-0x%lx] vma_name=\"%s\"",
 		__entry->pfn, __entry->order,
 		__print_symbolic(__entry->reason,
 			{ 0, "PARTIALLY_MAPPED" }, { 1, "ZAP" },
-			{ 2, "KHUGEPAGED" }))
+			{ 2, "KHUGEPAGED" }),
+		__entry->pid, __entry->tgid, __entry->comm,
+		__entry->leader_comm, __entry->mm, __entry->vma_start,
+		__entry->vma_end, __get_str(vma_name))
 );
 
 TRACE_EVENT(mm_folio_split,
@@ -293,20 +316,37 @@ TRACE_EVENT(mm_madvise_dontneed,
 		 unsigned long len),
 	TP_ARGS(vma, start, len),
 	TP_STRUCT__entry(
+		__field(pid_t, pid)
+		__field(pid_t, tgid)
+		__array(char, comm, TASK_COMM_LEN)
+		__array(char, leader_comm, TASK_COMM_LEN)
+		__field(unsigned long, mm)
 		__field(unsigned long, vma_start)
 		__field(unsigned long, vma_end)
 		__field(unsigned long, start)
 		__field(unsigned long, len)
+		__string(vma_name, vma && anon_vma_name(vma) ?
+			 anon_vma_name(vma)->name : "")
 	),
 	TP_fast_assign(
+		__entry->pid = current->pid;
+		__entry->tgid = current->tgid;
+		memcpy(__entry->comm, current->comm, TASK_COMM_LEN);
+		memcpy(__entry->leader_comm,
+		       current->group_leader ? current->group_leader->comm :
+		       current->comm, TASK_COMM_LEN);
+		__entry->mm = (unsigned long)(vma ? vma->vm_mm : current->mm);
 		__entry->vma_start = vma->vm_start;
 		__entry->vma_end = vma->vm_end;
 		__entry->start = start;
 		__entry->len = len;
+		__assign_str(vma_name);
 	),
-	TP_printk("vma=0x%lx-0x%lx start=0x%lx len=%lu",
-		__entry->vma_start, __entry->vma_end,
-		__entry->start, __entry->len)
+	TP_printk("pid=%d tgid=%d comm=%s leader_comm=%s mm=0x%lx vma=[0x%lx-0x%lx] start=0x%lx len=%lu end=0x%lx vma_name=\"%s\"",
+		__entry->pid, __entry->tgid, __entry->comm,
+		__entry->leader_comm, __entry->mm, __entry->vma_start,
+		__entry->vma_end, __entry->start, __entry->len,
+		__entry->start + __entry->len, __get_str(vma_name))
 );
 
 TRACE_EVENT(mm_folio_partial_unmap,

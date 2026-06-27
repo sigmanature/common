@@ -1237,7 +1237,7 @@ static int collapse_huge_page(struct mm_struct *mm, unsigned long address,
 	set_pmd_at(mm, address, pmd, _pmd);
 	update_mmu_cache_pmd(vma, address, pmd);
 	this_cpu_inc(deferred_split_reason_counts[DSR_KHUGEPAGED]);
-	deferred_split_folio(folio, false);
+	deferred_split_folio(folio, false, DSR_KHUGEPAGED, vma);
 	spin_unlock(pmd_ptl);
 
 	folio = NULL;

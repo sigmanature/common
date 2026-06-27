@@ -1280,7 +1280,7 @@ static vm_fault_t __do_huge_pmd_anonymous_page(struct vm_fault *vmf)
 		map_anon_folio_pmd(folio, vmf->pmd, vma, haddr);
 		mm_inc_nr_ptes(vma->vm_mm);
 		this_cpu_inc(deferred_split_reason_counts[DSR_ZAP]);
-		deferred_split_folio(folio, false);
+		deferred_split_folio(folio, false, DSR_ZAP, vma);
 		spin_unlock(vmf->ptl);
 	}
 
@@ -4055,7 +4055,8 @@ bool __folio_unqueue_deferred_split(struct folio *folio)
 }
 
 /* partially_mapped=false won't clear PG_partially_mapped folio flag */
-void deferred_split_folio(struct folio *folio, bool partially_mapped)
+void deferred_split_folio(struct folio *folio, bool partially_mapped,
+			  unsigned int reason, struct vm_area_struct *vma)
 {
 	struct deferred_split *ds_queue = get_deferred_split_queue(folio);
 #ifdef CONFIG_MEMCG
@@ -4100,7 +4101,7 @@ void deferred_split_folio(struct folio *folio, bool partially_mapped)
 	if (list_empty(&folio->_deferred_list)) {
 		list_add_tail(&folio->_deferred_list, &ds_queue->split_queue);
 		ds_queue->split_queue_len++;
-		trace_mm_folio_deferred_split(folio, 0);
+		trace_mm_folio_deferred_split(folio, reason, vma);
 #ifdef CONFIG_MEMCG
 		if (memcg)
 			set_shrinker_bit(memcg, folio_nid(folio),

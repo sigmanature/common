@@ -1764,7 +1764,7 @@ static __always_inline void __folio_remove_rmap(struct folio *folio,
 	    !folio_test_partially_mapped(folio)) {
 		trace_mm_folio_partial_unmap(folio, page, nr, nr_pmdmapped);
 		this_cpu_inc(deferred_split_reason_counts[DSR_PARTIALLY_MAPPED]);
-		deferred_split_folio(folio, true);
+		deferred_split_folio(folio, true, DSR_PARTIALLY_MAPPED, vma);
 	}
 
 	__folio_mod_stat(folio, -nr, -nr_pmdmapped);
