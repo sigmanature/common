@@ -16,7 +16,6 @@ struct mmap_state {
 	pgoff_t pgoff;
 	unsigned long pglen;
 	vm_flags_t vm_flags;
-	unsigned long flags;
 	struct file *file;
 	pgprot_t page_prot;
 
@@ -38,7 +37,7 @@ struct mmap_state {
 	bool check_ksm_early;
 };
 
-#define MMAP_STATE(name, mm_, vmi_, addr_, len_, pgoff_, vm_flags_, file_, flags_) \
+#define MMAP_STATE(name, mm_, vmi_, addr_, len_, pgoff_, vm_flags_, file_) \
 	struct mmap_state name = {					\
 		.mm = mm_,						\
 		.vmi = vmi_,						\
@@ -47,7 +46,6 @@ struct mmap_state {
 		.pgoff = pgoff_,					\
 		.pglen = PHYS_PFN(len_),				\
 		.vm_flags = vm_flags_,					\
-		.flags = flags_,					\
 		.file = file_,						\
 		.page_prot = vm_get_page_prot(vm_flags_),		\
 	}
@@ -564,31 +562,6 @@ __split_vma(struct vma_iterator *vmi, struct vm_area_struct *vma,
 		vma->vm_pgoff += (addr - new->vm_start) >> PAGE_SHIFT;
 	} else {
 		vma->vm_end = addr;
-	}
-
-	/*
-	 * Mark both fragments with "_split" suffix so we can distinguish
-	 * originally-misaligned VMAs from split fragments.
-	 */
-	if (vma->anon_name &&
-	    !strstr(vma->anon_name->name, "_split") &&
-	    (!strncmp(vma->anon_name->name, "MAP_FIXED:", 10) ||
-	     !strncmp(vma->anon_name->name, "non_MAP_FIXED:", 14) ||
-	     !strncmp(vma->anon_name->name, "brk:", 4))) {
-		char split_name[64];
-		struct anon_vma_name *split_anon;
-
-		snprintf(split_name, sizeof(split_name), "%s_split",
-			 vma->anon_name->name);
-		split_anon = anon_vma_name_alloc(split_name);
-		if (split_anon) {
-			struct anon_vma_name *old = vma->anon_name;
-
-			vma->anon_name = anon_vma_name_reuse(split_anon);
-			new->anon_name = anon_vma_name_reuse(split_anon);
-			anon_vma_name_put(old);
-			anon_vma_name_put(old);
-		}
 	}
 
 	/* vma_complete stores the new vma */
@@ -2503,36 +2476,8 @@ static int __mmap_new_vma(struct mmap_state *map, struct vm_area_struct **vmap)
 		error = __mmap_new_file_vma(map, vma);
 	else if (map->vm_flags & VM_SHARED)
 		error = shmem_zero_setup(vma);
-	else {
+	else
 		vma_set_anonymous(vma);
-		/*
-		 * Set anon_vma_name for anonymous VMAs with MAP_FIXED and
-		 * 16KB alignment information for debugging.
-		 */
-		if (map->flags & MAP_FIXED) {
-			if (IS_ALIGNED(map->addr, 16384) &&
-			    IS_ALIGNED(map->end, 16384))
-				vma->anon_name = anon_vma_name_alloc(
-					"MAP_FIXED:16KB_aligned");
-			else if (IS_ALIGNED(map->addr, 16384))
-				vma->anon_name = anon_vma_name_alloc(
-					"MAP_FIXED:start_16KB_aligned_end_not");
-			else
-				vma->anon_name = anon_vma_name_alloc(
-					"MAP_FIXED:not_16KB_aligned");
-		} else {
-			if (IS_ALIGNED(map->addr, 16384) &&
-			    IS_ALIGNED(map->end, 16384))
-				vma->anon_name = anon_vma_name_alloc(
-					"non_MAP_FIXED:16KB_aligned");
-			else if (IS_ALIGNED(map->addr, 16384))
-				vma->anon_name = anon_vma_name_alloc(
-					"non_MAP_FIXED:start_16KB_aligned_end_not");
-			else
-				vma->anon_name = anon_vma_name_alloc(
-					"non_MAP_FIXED:not_16KB_aligned");
-		}
-	}
 
 	if (error)
 		goto free_iter_vma;
@@ -2693,14 +2638,14 @@ static bool can_set_ksm_flags_early(struct mmap_state *map)
 
 static unsigned long __mmap_region(struct file *file, unsigned long addr,
 		unsigned long len, vm_flags_t vm_flags, unsigned long pgoff,
-		struct list_head *uf, unsigned long flags)
+		struct list_head *uf)
 {
 	struct mm_struct *mm = current->mm;
 	struct vm_area_struct *vma = NULL;
 	int error;
 	bool have_mmap_prepare = file && file->f_op->mmap_prepare;
 	VMA_ITERATOR(vmi, mm, addr);
-	MMAP_STATE(map, mm, &vmi, addr, len, pgoff, vm_flags, file, flags);
+	MMAP_STATE(map, mm, &vmi, addr, len, pgoff, vm_flags, file);
 
 	map.check_ksm_early = can_set_ksm_flags_early(&map);
 
@@ -2768,7 +2713,7 @@ abort_munmap:
  */
 unsigned long mmap_region(struct file *file, unsigned long addr,
 			  unsigned long len, vm_flags_t vm_flags, unsigned long pgoff,
-			  struct list_head *uf, unsigned long flags)
+			  struct list_head *uf)
 {
 	unsigned long ret;
 	bool writable_file_mapping = false;
@@ -2792,7 +2737,7 @@ unsigned long mmap_region(struct file *file, unsigned long addr,
 		writable_file_mapping = true;
 	}
 
-	ret = __mmap_region(file, addr, len, vm_flags, pgoff, uf, flags);
+	ret = __mmap_region(file, addr, len, vm_flags, pgoff, uf);
 
 	/* Clear our write mapping regardless of error. */
 	if (writable_file_mapping)
@@ -2859,19 +2804,6 @@ int do_brk_flags(struct vma_iterator *vmi, struct vm_area_struct *vma,
 		goto unacct_fail;
 
 	vma_set_anonymous(vma);
-	/*
-	 * Set anon_vma_name for brk-created anonymous VMAs with
-	 * 16KB alignment information. brk() is never MAP_FIXED.
-	 */
-	if (IS_ALIGNED(addr, 16384) && IS_ALIGNED(addr + len, 16384))
-		vma->anon_name = anon_vma_name_alloc(
-			"brk:16KB_aligned");
-	else if (IS_ALIGNED(addr, 16384))
-		vma->anon_name = anon_vma_name_alloc(
-			"brk:start_16KB_aligned_end_not");
-	else
-		vma->anon_name = anon_vma_name_alloc(
-			"brk:not_16KB_aligned");
 	vma_set_range(vma, addr, addr + len, addr >> PAGE_SHIFT);
 	vm_flags_init(vma, vm_flags);
 	vma->vm_page_prot = vm_get_page_prot(vm_flags);
