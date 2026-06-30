@@ -1890,6 +1890,7 @@ static int sysctl_compact_unevictable_allowed __read_mostly = CONFIG_COMPACT_UNE
 static unsigned int __read_mostly sysctl_compaction_proactiveness = 20;
 static int sysctl_extfrag_threshold = 500;
 static int __read_mostly sysctl_compact_memory;
+static unsigned long sysctl_compact_order2_threshold __read_mostly = 2048;
 
 static inline void
 update_fast_start_pfn(struct compact_control *cc, unsigned long pfn)
@@ -3077,6 +3078,7 @@ static void kcompactd_do_work(pg_data_t *pgdat)
 
 	for (zoneid = 0; zoneid <= cc.highest_zoneidx; zoneid++) {
 		int status;
+		unsigned long order2_before, order2_after;
 
 		zone = &pgdat->node_zones[zoneid];
 		if (!populated_zone(zone))
@@ -3095,7 +3097,12 @@ static void kcompactd_do_work(pg_data_t *pgdat)
 			return;
 
 		cc.zone = zone;
+		order2_before = zone->free_area[2].nr_free;
 		status = compact_zone(&cc, NULL);
+		order2_after = zone->free_area[2].nr_free;
+		if (order2_after > order2_before)
+			count_compact_events(KCOMPACTD_ORDER2_CREATED,
+					     order2_after - order2_before);
 
 		if (status == COMPACT_SUCCESS) {
 			compaction_defer_reset(zone, cc.order, false);
@@ -3158,6 +3165,17 @@ void wakeup_kcompactd(pg_data_t *pgdat, int order, int highest_zoneidx)
 	wake_up_interruptible(&pgdat->kcompactd_wait);
 }
 
+static unsigned long free_pages_at_order(struct zone *zone, unsigned int order)
+{
+	unsigned long nr_free = 0;
+	unsigned int i;
+
+	for (i = order; i < NR_PAGE_ORDERS; i++)
+		nr_free += zone->free_area[i].nr_free << (i - order);
+
+	return nr_free;
+}
+
 /*
  * The background compaction daemon, started as a kernel thread
  * from the init process.
@@ -3167,6 +3185,7 @@ static int kcompactd(void *p)
 	pg_data_t *pgdat = (pg_data_t *)p;
 	long default_timeout = msecs_to_jiffies(HPAGE_FRAG_CHECK_INTERVAL_MSEC);
 	long timeout = default_timeout;
+	int i;
 
 	current->flags |= PF_KCOMPACTD;
 	set_freezable();
@@ -3207,6 +3226,19 @@ static int kcompactd(void *p)
 		 * on the fragmentation score, this timeout is updated.
 		 */
 		timeout = default_timeout;
+		for (i = 0; i < pgdat->nr_zones; i++) {
+			struct zone *zone = pgdat->node_zones + i;
+			if (!populated_zone(zone))
+				continue;
+
+			if (sysctl_compact_order2_threshold &&
+			    free_pages_at_order(zone, 2) < sysctl_compact_order2_threshold) {
+				pgdat->kcompactd_max_order = max(pgdat->kcompactd_max_order, 2);
+				pgdat->kcompactd_highest_zoneidx = zone_idx(zone);
+				kcompactd_do_work(pgdat);
+				break;
+			}
+		}
 		if (should_proactive_compact_node(pgdat)) {
 			unsigned int prev_score, score;
 
@@ -3317,6 +3349,13 @@ static const struct ctl_table vm_compaction[] = {
 		.proc_handler	= proc_dointvec_minmax_warn_RT_change,
 		.extra1		= SYSCTL_ZERO,
 		.extra2		= SYSCTL_ONE,
+	},
+	{
+		.procname	= "compact_order2_threshold",
+		.data		= &sysctl_compact_order2_threshold,
+		.maxlen		= sizeof(unsigned long),
+		.mode		= 0644,
+		.proc_handler	= proc_doulongvec_minmax,
 	},
 };
 

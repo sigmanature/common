@@ -1385,7 +1385,10 @@ const char * const vmstat_text[] = {
 	[I(KCOMPACTD_WAKE)]			= "compact_daemon_wake",
 	[I(KCOMPACTD_MIGRATE_SCANNED)]		= "compact_daemon_migrate_scanned",
 	[I(KCOMPACTD_FREE_SCANNED)]		= "compact_daemon_free_scanned",
+	[I(KCOMPACTD_ORDER2_CREATED)]		= "compact_daemon_order2_created",
 #endif
+	[I(ALLOC_SUCCESS_ORDER0)]		= "alloc_success_order0",
+	[I(ALLOC_SUCCESS_ORDER2)]		= "alloc_success_order2",
 
 #ifdef CONFIG_HUGETLB_PAGE
 	[I(HTLB_BUDDY_PGALLOC)]			= "htlb_buddy_alloc_success",

@@ -3909,6 +3909,11 @@ try_this_zone:
 		if (page) {
 			prep_new_page(page, order, gfp_mask, alloc_flags);
 
+			if (order == 0)
+				count_vm_event(ALLOC_SUCCESS_ORDER0);
+			else if (order == 2)
+				count_vm_event(ALLOC_SUCCESS_ORDER2);
+
 			/*
 			 * If this is a high-order atomic allocation then check
 			 * if the pageblock should be reserved for the future
@@ -4743,6 +4748,10 @@ restart:
 	page = get_page_from_freelist(gfp_mask, order, alloc_flags, ac);
 	if (page)
 		goto got_pg;
+
+	if (order == 2 && can_compact)
+		wakeup_kcompactd(ac->preferred_zoneref->zone->zone_pgdat,
+				order, ac->highest_zoneidx);
 
 	/*
 	 * For costly allocations, try direct compaction first, as it's likely
