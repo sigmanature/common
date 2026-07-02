@@ -54,8 +54,6 @@ static void f2fs_zero_post_eof_page(struct inode *inode,
 		filemap_invalidate_unlock(inode->i_mapping);
 }
 
-void f2fs_mark_db_file(struct inode *inode, struct dentry *dentry);
-
 static vm_fault_t f2fs_filemap_fault(struct vm_fault *vmf)
 {
 	struct inode *inode = file_inode(vmf->vma->vm_file);
@@ -67,8 +65,7 @@ static vm_fault_t f2fs_filemap_fault(struct vm_fault *vmf)
 		f2fs_update_iostat(F2FS_I_SB(inode), inode,
 					APP_MAPPED_READ_IO, F2FS_BLKSIZE);
 
-	if (is_inode_flag_set(inode, FI_DB_FILE))
-		trace_f2fs_filemap_fault(inode, vmf->pgoff, flags, ret);
+	trace_f2fs_filemap_fault(inode, vmf->pgoff, flags, ret);
 
 	return ret;
 }
@@ -149,11 +146,6 @@ static vm_fault_t f2fs_vm_page_mkwrite(struct vm_fault *vmf)
 					valid_end - folio_start - subpage_off : 0;
 	}
 
-	if (is_inode_flag_set(inode, FI_DB_FILE))
-		trace_f2fs_large_folio_mkwrite(inode, folio, pidx, pos, isize,
-				valid_end, dirty_len, need_alloc,
-				folio_has_ffs(folio), folio_test_dirty(folio));
-
 	if (unlikely(folio->mapping != inode->i_mapping ||
 			pos >= isize ||
 			!ffs_test_blk_uptodate(folio,
@@ -223,9 +215,8 @@ out_sem:
 out:
 	ret = vmf_fs_error(err);
 
-	if (is_inode_flag_set(inode, FI_DB_FILE))
-		trace_f2fs_vm_page_mkwrite(inode, pidx, folio->index,
-					   vmf->vma->vm_flags, ret);
+	trace_f2fs_vm_page_mkwrite(inode, pidx, folio->index,
+				   vmf->vma->vm_flags, ret);
 	return ret;
 }
 
@@ -679,21 +670,8 @@ static int f2fs_file_open(struct inode *inode, struct file *filp)
 	err = finish_preallocate_blocks(inode);
 	if (!err) {
 		atomic_inc(&F2FS_I(inode)->open_count);
-		f2fs_mark_db_file(inode, filp->f_path.dentry);
 	}
 	return err;
-}
-
-void f2fs_mark_db_file(struct inode *inode, struct dentry *dentry)
-{
-	if (is_inode_flag_set(inode, FI_DB_FILE))
-		return;
-
-	if (f2fs_is_db_dentry(dentry)) {
-		set_inode_flag(inode, FI_DB_FILE);
-		trace_f2fs_db_file_detected(inode,
-				dentry->d_name.name, dentry->d_name.len);
-	}
 }
 
 void f2fs_truncate_data_blocks_range(struct dnode_of_data *dn, int count)

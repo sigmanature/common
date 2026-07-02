@@ -1849,30 +1849,6 @@ TRACE_EVENT(f2fs_readpages,
 		__entry->max_order)
 );
 
-TRACE_EVENT(f2fs_db_file_detected,
-
-	TP_PROTO(struct inode *inode, const char *name, int namelen),
-
-	TP_ARGS(inode, name, namelen),
-
-	TP_STRUCT__entry(
-		__field(dev_t,	dev)
-		__field(ino_t,	ino)
-		__array(char,	name, 64)
-	),
-
-	TP_fast_assign(
-		__entry->dev	= inode->i_sb->s_dev;
-		__entry->ino	= inode->i_ino;
-		memcpy(__entry->name, name, min(namelen, 63));
-		__entry->name[min(namelen, 63)] = '\0';
-	),
-
-	TP_printk("dev=(%d,%d) ino=%lu name=%s",
-		show_dev_ino(__entry),
-		__entry->name)
-);
-
 TRACE_EVENT(f2fs_write_checkpoint,
 
 	TP_PROTO(struct super_block *sb, int reason, const char *msg),

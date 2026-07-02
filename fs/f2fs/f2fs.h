@@ -880,7 +880,6 @@ enum {
 	FI_ATOMIC_REPLACE,	/* indicate atomic replace */
 	FI_OPENED_FILE,		/* indicate file has been opened */
 	FI_DONATE_FINISHED,	/* indicate page donation of file has been finished */
-	FI_DB_FILE,		/* track file as SQLite/DB for folio tracing */
 	FI_MAX,			/* max flag, never be used */
 };
 
@@ -5025,22 +5024,6 @@ static inline void f2fs_set_inode_mapping_order(struct inode *inode)
 	min_order = min(min_order, max_order);
 	mapping_set_folio_order_range(inode->i_mapping, min_order, max_order);
 }
-
-static inline bool f2fs_is_db_dentry(const struct dentry *dentry)
-{
-	const char *name = dentry->d_name.name;
-	int len = dentry->d_name.len;
-
-	if (len < 7)
-		return false;
-
-	/* only match .db-shm files */
-	if (!strcmp(name + len - 7, ".db-shm"))
-		return true;
-	return false;
-}
-
-void f2fs_mark_db_file(struct inode *inode, struct dentry *dentry);
 
 static inline bool f2fs_block_unit_discard(struct f2fs_sb_info *sbi)
 {

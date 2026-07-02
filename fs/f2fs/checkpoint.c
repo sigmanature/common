@@ -1039,10 +1039,6 @@ void f2fs_update_dirty_folio(struct inode *inode, struct folio *folio)
 			!S_ISLNK(inode->i_mode))
 		return;
 
-	if (folio_test_large(folio) && !folio_has_ffs(folio) &&
-	    is_inode_flag_set(inode, FI_DB_FILE))
-		trace_f2fs_large_folio_dirty_without_ffs(inode, folio);
-
 	spin_lock(&sbi->inode_lock[type]);
 	if (type != FILE_INODE || test_opt(sbi, DATA_FLUSH))
 		__add_dirty_inode(inode, type);

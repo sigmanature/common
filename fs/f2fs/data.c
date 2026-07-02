@@ -412,11 +412,6 @@ static void f2fs_write_end_io(struct bio *bio)
 
 		if (unlikely(bio->bi_status != BLK_STS_OK)) {
 			mapping_set_error(folio->mapping, -EIO);
-			if (is_inode_flag_set(folio->mapping->host,
-						FI_DB_FILE))
-				trace_f2fs_mapping_set_error(
-					folio->mapping->host, -EIO,
-					current->pid);
 			if (type == F2FS_WB_CP_DATA)
 				f2fs_stop_checkpoint(sbi, true,
 						STOP_CP_REASON_WRITE_FAIL);
@@ -2479,11 +2474,8 @@ struct f2fs_folio_state *ffs_find_or_alloc(struct folio *folio)
 	ffs->private_flags = private_flags;
 	if (folio_test_uptodate(folio))
 		bitmap_set(ffs->state, 0, nr_subpages);
-	if (folio_test_dirty(folio)) {
-		if (inode && is_inode_flag_set(inode, FI_DB_FILE))
-			trace_f2fs_large_folio_ffs_bootstrap_dirty(inode, folio);
+	if (folio_test_dirty(folio))
 		bitmap_set(ffs->state, nr_subpages, nr_subpages);
-	}
 
 	if (folio_test_private(folio))
 		folio_detach_private(folio);
@@ -2870,10 +2862,6 @@ got_it:
 				spin_lock_irq(&ffs->state_lock);
 				__ffs_mark_subrange_uptodate(folio, ffs,
 						page_offset, PAGE_SIZE);
-				if (is_inode_flag_set(inode, FI_DB_FILE))
-					trace_f2fs_read_large_folio_hole(inode,
-						folio, offset,
-						ffs_test_blk_uptodate(folio, index));
 				spin_unlock_irq(&ffs->state_lock);
 			}
 			nrpages -= len_blks;
@@ -2893,9 +2881,6 @@ got_it:
 			spin_lock_irq(&ffs->state_lock);
 			ffs->read_pages_pending += len_blks;
 			spin_unlock_irq(&ffs->state_lock);
-			if (is_inode_flag_set(inode, FI_DB_FILE))
-				trace_f2fs_read_large_folio_mapped(inode, folio,
-						offset, len_blks);
 		}
 
 		/*
@@ -3449,16 +3434,6 @@ static int f2fs_write_single_data_folio(struct folio *folio, int *submitted,
 			atomic_add(1, &ffs->write_pages_pending);
 		}
 
-	if (folio_test_large(folio) &&
-	    is_inode_flag_set(inode, FI_DB_FILE) &&
-	    trace_f2fs_large_folio_write_zero_subpage_enabled() &&
-	    f2fs_large_folio_subpage_is_all_zero(folio, i)) {
-			trace_f2fs_large_folio_write_zero_subpage(inode, folio,
-					data_idx, i, start, end, has_ffs,
-					ffs_test_blk_dirty(folio, data_idx),
-					ffs_test_blk_uptodate(folio, data_idx));
-		}
-
 		set_new_dnode(&dn, dn_inode, NULL, NULL, 0);
 
 		/* 1) Fast path: extent cache hit + IPU */
@@ -3591,8 +3566,6 @@ int f2fs_write_single_data_page(struct folio *folio, int *submitted,
 	/* we should bypass data pages to proceed the kworker jobs */
 	if (unlikely(f2fs_cp_error(sbi))) {
 		mapping_set_error(folio->mapping, -EIO);
-		if (is_inode_flag_set(inode, FI_DB_FILE))
-			trace_f2fs_mapping_set_error(inode, -EIO, current->pid);
 		/*
 		 * don't drop any dirty dentry pages for keeping lastest
 		 * directory structure.
@@ -4778,8 +4751,7 @@ static int f2fs_write_begin(const struct kiocb *iocb,
 	fgf_t fgp = FGP_LOCK | FGP_WRITE | FGP_CREAT;
 	int err = 0;
 
-	if (is_inode_flag_set(inode, FI_DB_FILE))
-		trace_f2fs_write_begin(inode, pos, len);
+	trace_f2fs_write_begin(inode, pos, len);
 
 	if (!f2fs_is_checkpoint_ready(sbi)) {
 		err = -ENOSPC;
