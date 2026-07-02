@@ -5269,8 +5269,8 @@ static int __ext4_fill_super(struct fs_context *fc, struct super_block *sb)
 		ctx->journal_ioprio = EXT4_DEF_JOURNAL_IOPRIO;
 
 	sbi->s_inode_readahead_blks = EXT4_DEF_INODE_READAHEAD_BLKS;
-	sbi->s_min_folio_order_cap = 2;
-	sbi->s_max_folio_order_cap = 2;
+	sbi->s_min_folio_order_cap = ext4_min_folio_order_cap;
+	sbi->s_max_folio_order_cap = ext4_max_folio_order_cap;
 	sbi->s_sectors_written_start =
 		part_stat_read(sb->s_bdev, sectors[STAT_WRITE]);
 

@@ -1784,6 +1784,9 @@ struct ext4_sb_info {
 	struct ext4_fc_replay_state s_fc_replay_state;
 };
 
+extern unsigned int ext4_min_folio_order_cap;
+extern unsigned int ext4_max_folio_order_cap;
+
 static inline struct ext4_sb_info *EXT4_SB(struct super_block *sb)
 {
 	return sb->s_fs_info;

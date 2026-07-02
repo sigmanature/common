@@ -4896,8 +4896,8 @@ try_onemore:
 
 	sbi->sb = sb;
 
-	sbi->max_folio_order_cap = 2;
-	sbi->min_folio_order_cap = 2;
+	sbi->max_folio_order_cap = f2fs_max_folio_order_cap;
+	sbi->min_folio_order_cap = f2fs_min_folio_order_cap;
 	sbi->large_folio_dirty_mode = 1;
 
 	/* initialize locks within allocated memory */

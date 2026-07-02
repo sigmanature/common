@@ -62,15 +62,6 @@
 #include "shuffle.h"
 #include "page_reporting.h"
 
-enum alloc_fail_reason {
-	AFR_WMARK,
-	AFR_FRAGMENT,
-	AFR_NR,
-};
-
-DEFINE_PER_CPU(unsigned long, alloc_fail_counts[AFR_NR]);
-DEFINE_PER_CPU(int, last_alloc_fail_reason);
-
 /* Free Page Internal flags: for internal, non-pcp variants of free_pages(). */
 typedef int __bitwise fpi_t;
 
@@ -3575,10 +3566,10 @@ bool __zone_watermark_ok_raw(struct zone *z, unsigned int order, unsigned long m
 	 * even if a suitable page happened to be free.
 	 */
 	if (free_pages <= min + z->lowmem_reserve[highest_zoneidx]) {
-		if(direct_reclaim) {
+		if (direct_reclaim) {
 			trace_alloc_stall_lowwatermark(z, order, min, free_pages,
-						       alloc_flags);
-			this_cpu_write(last_alloc_fail_reason, AFR_WMARK);
+					       alloc_flags);
+			count_vm_event(ALLOC_FAIL_WMARK);
 		}
 		return false;
 	}
@@ -3611,9 +3602,9 @@ bool __zone_watermark_ok_raw(struct zone *z, unsigned int order, unsigned long m
 			return true;
 		}
 	}
-	if(direct_reclaim) {
+	if (direct_reclaim) {
 		trace_alloc_stall_fragment(z, order, alloc_flags);
-		this_cpu_write(last_alloc_fail_reason, AFR_FRAGMENT);
+		count_vm_event(ALLOC_FAIL_FRAGMENT);
 	}
 	return false;
 }
@@ -4749,9 +4740,11 @@ restart:
 	if (page)
 		goto got_pg;
 
-	if (order == 2 && can_compact)
+	if (order == 2 && can_compact) {
 		wakeup_kcompactd(ac->preferred_zoneref->zone->zone_pgdat,
 				order, ac->highest_zoneidx);
+		count_vm_event(KCOMPACTD_WAKE_ALLOC_SLOWPATH);
+	}
 
 	/*
 	 * For costly allocations, try direct compaction first, as it's likely
@@ -4851,9 +4844,8 @@ retry:
 		goto nopage;
 
 	/* Try direct reclaim and then allocating */
-	this_cpu_inc(alloc_fail_counts[this_cpu_read(last_alloc_fail_reason)]);
 	page = __alloc_pages_direct_reclaim(gfp_mask, order, alloc_flags, ac,
-							&did_some_progress);
+						&did_some_progress);
 	if (page)
 		goto got_pg;
 
@@ -7678,46 +7670,6 @@ struct page *alloc_pages_nolock_noprof(gfp_t gfp_flags, int nid, unsigned int or
 	return page;
 }
 EXPORT_SYMBOL_GPL(alloc_pages_nolock_noprof);
-
-#ifdef CONFIG_DEBUG_FS
-#include <linux/debugfs.h>
-#include <linux/seq_file.h>
-
-static int alloc_fail_show(struct seq_file *m, void *v)
-{
-	unsigned long totals[AFR_NR] = {0};
-	int cpu, i;
-
-	for_each_possible_cpu(cpu)
-		for (i = 0; i < AFR_NR; i++)
-			totals[i] += per_cpu(alloc_fail_counts[i], cpu);
-
-	seq_printf(m, "wmark:          %lu\n", totals[AFR_WMARK]);
-	seq_printf(m, "fragment:       %lu\n", totals[AFR_FRAGMENT]);
-	return 0;
-}
-
-static int alloc_fail_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, alloc_fail_show, NULL);
-}
-
-static const struct file_operations alloc_fail_fops = {
-	.owner = THIS_MODULE,
-	.open  = alloc_fail_open,
-	.read  = seq_read,
-	.llseek = seq_lseek,
-	.release = single_release,
-};
-
-static int __init alloc_fail_debugfs_init(void)
-{
-	debugfs_create_file("alloc_fail_reasons", 0400, NULL, NULL,
-			    &alloc_fail_fops);
-	return 0;
-}
-late_initcall(alloc_fail_debugfs_init);
-#endif
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/page_alloc.h>

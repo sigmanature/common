@@ -3226,6 +3226,7 @@ static int kcompactd(void *p)
 		 * on the fragmentation score, this timeout is updated.
 		 */
 		timeout = default_timeout;
+		count_vm_event(KCOMPACTD_TIMEOUT_WAKE);
 		for (i = 0; i < pgdat->nr_zones; i++) {
 			struct zone *zone = pgdat->node_zones + i;
 			if (!populated_zone(zone))

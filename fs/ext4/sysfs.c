@@ -14,6 +14,8 @@
 #include <linux/slab.h>
 #include <linux/proc_fs.h>
 #include <linux/part_stat.h>
+#include <linux/kobject.h>
+#include <linux/sysfs.h>
 
 #include "ext4.h"
 #include "ext4_jbd2.h"
@@ -26,8 +28,6 @@ typedef enum {
 	attr_reserved_clusters,
 	attr_sra_exceeded_retry_limit,
 	attr_inode_readahead,
-	attr_min_folio_order_cap,
-	attr_max_folio_order_cap,
 	attr_trigger_test_error,
 	attr_first_error_time,
 	attr_last_error_time,
@@ -100,21 +100,42 @@ static ssize_t inode_readahead_blks_store(struct ext4_sb_info *sbi,
 	return count;
 }
 
-static ssize_t max_folio_order_cap_show(struct ext4_sb_info *sbi, char *buf)
+unsigned int ext4_min_folio_order_cap = 2;
+unsigned int ext4_max_folio_order_cap = 2;
+
+static void ext4_apply_global_folio_order_caps(struct super_block *sb, void *arg)
 {
-	return sysfs_emit(buf, "%u\n", READ_ONCE(sbi->s_max_folio_order_cap));
+	struct ext4_sb_info *sbi = EXT4_SB(sb);
+
+	WRITE_ONCE(sbi->s_min_folio_order_cap,
+		   READ_ONCE(ext4_min_folio_order_cap));
+	WRITE_ONCE(sbi->s_max_folio_order_cap,
+		   READ_ONCE(ext4_max_folio_order_cap));
 }
 
-static ssize_t min_folio_order_cap_show(struct ext4_sb_info *sbi, char *buf)
+static ssize_t ext4_min_folio_order_cap_show(struct kobject *kobj,
+					    struct kobj_attribute *attr,
+					    char *buf)
 {
-	return sysfs_emit(buf, "%u\n", READ_ONCE(sbi->s_min_folio_order_cap));
+	return sysfs_emit(buf, "%u\n",
+			  READ_ONCE(ext4_min_folio_order_cap));
 }
 
-static ssize_t min_folio_order_cap_store(struct ext4_sb_info *sbi,
-					 const char *buf, size_t count)
+static ssize_t ext4_max_folio_order_cap_show(struct kobject *kobj,
+					    struct kobj_attribute *attr,
+					    char *buf)
+{
+	return sysfs_emit(buf, "%u\n",
+			  READ_ONCE(ext4_max_folio_order_cap));
+}
+
+static ssize_t ext4_min_folio_order_cap_store(struct kobject *kobj,
+					     struct kobj_attribute *attr,
+					     const char *buf, size_t count)
 {
 	unsigned long t;
 	int ret;
+	struct file_system_type *ext4_fs_type;
 
 	ret = kstrtoul(skip_spaces(buf), 0, &t);
 	if (ret)
@@ -122,15 +143,24 @@ static ssize_t min_folio_order_cap_store(struct ext4_sb_info *sbi,
 	if (t > MAX_PAGECACHE_ORDER)
 		return -EINVAL;
 
-	WRITE_ONCE(sbi->s_min_folio_order_cap, (unsigned int)t);
+	WRITE_ONCE(ext4_min_folio_order_cap, (unsigned int)t);
+
+	ext4_fs_type = get_fs_type("ext4");
+	if (ext4_fs_type) {
+		iterate_supers_type(ext4_fs_type,
+				    ext4_apply_global_folio_order_caps, NULL);
+		put_filesystem(ext4_fs_type);
+	}
 	return count;
 }
 
-static ssize_t max_folio_order_cap_store(struct ext4_sb_info *sbi,
-					 const char *buf, size_t count)
+static ssize_t ext4_max_folio_order_cap_store(struct kobject *kobj,
+					     struct kobj_attribute *attr,
+					     const char *buf, size_t count)
 {
 	unsigned long t;
 	int ret;
+	struct file_system_type *ext4_fs_type;
 
 	ret = kstrtoul(skip_spaces(buf), 0, &t);
 	if (ret)
@@ -138,7 +168,14 @@ static ssize_t max_folio_order_cap_store(struct ext4_sb_info *sbi,
 	if (t > MAX_PAGECACHE_ORDER)
 		return -EINVAL;
 
-	WRITE_ONCE(sbi->s_max_folio_order_cap, (unsigned int)t);
+	WRITE_ONCE(ext4_max_folio_order_cap, (unsigned int)t);
+
+	ext4_fs_type = get_fs_type("ext4");
+	if (ext4_fs_type) {
+		iterate_supers_type(ext4_fs_type,
+				    ext4_apply_global_folio_order_caps, NULL);
+		put_filesystem(ext4_fs_type);
+	}
 	return count;
 }
 
@@ -254,8 +291,7 @@ EXT4_ATTR_FUNC(session_write_kbytes, 0444);
 EXT4_ATTR_FUNC(lifetime_write_kbytes, 0444);
 EXT4_ATTR_FUNC(reserved_clusters, 0644);
 EXT4_ATTR_FUNC(sra_exceeded_retry_limit, 0444);
-EXT4_ATTR_FUNC(min_folio_order_cap, 0644);
-EXT4_ATTR_FUNC(max_folio_order_cap, 0644);
+
 
 EXT4_ATTR_OFFSET(inode_readahead_blks, 0644, inode_readahead,
 		 ext4_sb_info, s_inode_readahead_blks);
@@ -313,8 +349,6 @@ static struct attribute *ext4_attrs[] = {
 	ATTR_LIST(reserved_clusters),
 	ATTR_LIST(sra_exceeded_retry_limit),
 	ATTR_LIST(inode_readahead_blks),
-	ATTR_LIST(min_folio_order_cap),
-	ATTR_LIST(max_folio_order_cap),
 	ATTR_LIST(inode_goal),
 	ATTR_LIST(mb_stats),
 	ATTR_LIST(mb_max_to_scan),
@@ -491,10 +525,6 @@ static ssize_t ext4_attr_show(struct kobject *kobj,
 		return print_tstamp(buf, sbi->s_es, s_last_error_time);
 	case attr_journal_task:
 		return journal_task_show(sbi, buf);
-	case attr_min_folio_order_cap:
-		return min_folio_order_cap_show(sbi, buf);
-	case attr_max_folio_order_cap:
-		return max_folio_order_cap_show(sbi, buf);
 	default:
 		return ext4_generic_attr_show(a, sbi, buf);
 	}
@@ -569,10 +599,6 @@ static ssize_t ext4_attr_store(struct kobject *kobj,
 		return reserved_clusters_store(sbi, buf, len);
 	case attr_inode_readahead:
 		return inode_readahead_blks_store(sbi, buf, len);
-	case attr_min_folio_order_cap:
-		return min_folio_order_cap_store(sbi, buf, len);
-	case attr_max_folio_order_cap:
-		return max_folio_order_cap_store(sbi, buf, len);
 	case attr_trigger_test_error:
 		return trigger_test_error(sbi, buf, len);
 	default:
@@ -608,6 +634,16 @@ static const struct kobj_type ext4_feat_ktype = {
 	.sysfs_ops	= &ext4_attr_ops,
 	.release	= ext4_feat_release,
 };
+
+static struct kobj_attribute ext4_min_folio_order_cap_attr =
+	__ATTR(min_folio_order_cap, 0644,
+	       ext4_min_folio_order_cap_show,
+	       ext4_min_folio_order_cap_store);
+
+static struct kobj_attribute ext4_max_folio_order_cap_attr =
+	__ATTR(max_folio_order_cap, 0644,
+	       ext4_max_folio_order_cap_show,
+	       ext4_max_folio_order_cap_store);
 
 void ext4_notify_error_sysfs(struct ext4_sb_info *sbi)
 {
@@ -680,9 +716,24 @@ int __init ext4_init_sysfs(void)
 	if (ret)
 		goto feat_err;
 
+	ret = sysfs_create_file(ext4_root,
+				&ext4_min_folio_order_cap_attr.attr);
+	if (ret)
+		goto global_err;
+
+	ret = sysfs_create_file(ext4_root,
+				&ext4_max_folio_order_cap_attr.attr);
+	if (ret)
+		goto global_err;
+
 	ext4_proc_root = proc_mkdir(proc_dirname, NULL);
 	return ret;
 
+global_err:
+	sysfs_remove_file(ext4_root,
+			  &ext4_min_folio_order_cap_attr.attr);
+	sysfs_remove_file(ext4_root,
+			  &ext4_max_folio_order_cap_attr.attr);
 feat_err:
 	kobject_put(ext4_feat);
 	ext4_feat = NULL;
@@ -694,6 +745,10 @@ root_err:
 
 void ext4_exit_sysfs(void)
 {
+	sysfs_remove_file(ext4_root,
+			  &ext4_min_folio_order_cap_attr.attr);
+	sysfs_remove_file(ext4_root,
+			  &ext4_max_folio_order_cap_attr.attr);
 	kobject_put(ext4_feat);
 	ext4_feat = NULL;
 	kobject_put(ext4_root);

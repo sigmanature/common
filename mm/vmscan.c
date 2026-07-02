@@ -7209,6 +7209,7 @@ out:
 		 * pageblocks.
 		 */
 		wakeup_kcompactd(pgdat, pageblock_order, highest_zoneidx);
+		count_vm_event(KCOMPACTD_WAKE_VMSCAN);
 	}
 
 	snapshot_refaults(NULL, pgdat);
@@ -7272,6 +7273,7 @@ static void kswapd_try_to_sleep(pg_data_t *pgdat, int alloc_order, int reclaim_o
 		 * allocation of the requested order possible.
 		 */
 		wakeup_kcompactd(pgdat, alloc_order, highest_zoneidx);
+		count_vm_event(KCOMPACTD_WAKE_VMSCAN);
 
 		remaining = schedule_timeout(HZ/10);
 
@@ -7453,8 +7455,10 @@ void wakeup_kswapd(struct zone *zone, gfp_t gfp_flags, int order,
 		 * needed.  If it fails, it will defer subsequent attempts to
 		 * ratelimit its work.
 		 */
-		if (!(gfp_flags & __GFP_DIRECT_RECLAIM))
+		if (!(gfp_flags & __GFP_DIRECT_RECLAIM)) {
 			wakeup_kcompactd(pgdat, order, highest_zoneidx);
+			count_vm_event(KCOMPACTD_WAKE_VMSCAN);
+		}
 		return;
 	}
 

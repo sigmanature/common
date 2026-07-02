@@ -1389,6 +1389,14 @@ const char * const vmstat_text[] = {
 #endif
 	[I(ALLOC_SUCCESS_ORDER0)]		= "alloc_success_order0",
 	[I(ALLOC_SUCCESS_ORDER2)]		= "alloc_success_order2",
+	[I(ALLOC_FAIL_WMARK)]			= "alloc_fail_wmark",
+	[I(ALLOC_FAIL_FRAGMENT)]		= "alloc_fail_fragment",
+	[I(KCOMPACTD_TIMEOUT_WAKE)]		= "kcompactd_timeout_wake",
+	[I(KCOMPACTD_ORDER2_LOW)]		= "kcompactd_order2_low",
+	[I(KCOMPACTD_O2_MOVABLE_EMPTY)]		= "kcompactd_o2_movable_empty",
+	[I(KCOMPACTD_O2_MOVABLE_HAS)]		= "kcompactd_o2_movable_has",
+	[I(KCOMPACTD_WAKE_VMSCAN)]		= "kcompactd_wake_from_vmscan",
+	[I(KCOMPACTD_WAKE_ALLOC_SLOWPATH)]	= "kcompactd_wake_from_alloc",
 
 #ifdef CONFIG_HUGETLB_PAGE
 	[I(HTLB_BUDDY_PGALLOC)]			= "htlb_buddy_alloc_success",

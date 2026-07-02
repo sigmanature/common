@@ -1946,6 +1946,9 @@ struct f2fs_sb_info {
 	u32 large_folio_dirty_mode;	/* 0=subpage dirty (default), 1=full folio dirty */
 };
 
+extern u32 f2fs_min_folio_order_cap;
+extern u32 f2fs_max_folio_order_cap;
+
 struct f2fs_folio_state {
 	spinlock_t		state_lock;
 	unsigned int		read_pages_pending;
