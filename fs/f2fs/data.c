@@ -2455,7 +2455,6 @@ struct f2fs_folio_state *ffs_find_or_alloc(struct folio *folio)
 	struct f2fs_folio_state *ffs;
 	unsigned int nr_subpages = folio_nr_pages(folio);
 	unsigned long private_flags = 0;
-	struct inode *inode = folio->mapping ? folio->mapping->host : NULL;
 
 	f2fs_bug_on(F2FS_F_SB(folio), !folio_test_large(folio));
 
@@ -2481,18 +2480,6 @@ struct f2fs_folio_state *ffs_find_or_alloc(struct folio *folio)
 		folio_detach_private(folio);
 	folio_attach_private(folio, ffs);
 	return ffs;
-}
-
-static bool f2fs_large_folio_subpage_is_all_zero(struct folio *folio,
-						  pgoff_t sub_idx)
-{
-	void *addr;
-	bool all_zero;
-
-	addr = kmap_local_folio(folio, sub_idx * PAGE_SIZE);
-	all_zero = !memchr_inv(addr, 0, PAGE_SIZE);
-	kunmap_local(addr);
-	return all_zero;
 }
 
 static void ffs_detach_free(struct folio *folio)
@@ -3407,7 +3394,6 @@ static int f2fs_write_single_data_folio(struct folio *folio, int *submitted,
 		struct dnode_of_data dn;
 		struct node_info ni;
 		pgoff_t data_idx = folio->index + i;
-		bool has_ffs = folio_has_ffs(folio);
 		bool ipu_force = false;
 		struct f2fs_io_info fio = {
 			.sbi = sbi,

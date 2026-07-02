@@ -186,80 +186,6 @@ static ssize_t atgc_enabled_show(struct f2fs_attr *a,
 u32 f2fs_min_folio_order_cap = 2;
 u32 f2fs_max_folio_order_cap = 2;
 
-static void f2fs_apply_global_folio_order_caps(struct super_block *sb, void *arg)
-{
-	struct f2fs_sb_info *sbi = F2FS_SB(sb);
-
-	WRITE_ONCE(sbi->min_folio_order_cap,
-		   READ_ONCE(f2fs_min_folio_order_cap));
-	WRITE_ONCE(sbi->max_folio_order_cap,
-		   READ_ONCE(f2fs_max_folio_order_cap));
-}
-
-static ssize_t f2fs_min_folio_order_cap_show(struct kobject *kobj,
-				    struct kobj_attribute *attr, char *buf)
-{
-	return sysfs_emit(buf, "%u\n",
-			  READ_ONCE(f2fs_min_folio_order_cap));
-}
-
-static ssize_t f2fs_max_folio_order_cap_show(struct kobject *kobj,
-				    struct kobj_attribute *attr, char *buf)
-{
-	return sysfs_emit(buf, "%u\n",
-			  READ_ONCE(f2fs_max_folio_order_cap));
-}
-
-static ssize_t f2fs_min_folio_order_cap_store(struct kobject *kobj,
-				     struct kobj_attribute *attr,
-				     const char *buf, size_t count)
-{
-	unsigned long t;
-	int ret;
-	struct file_system_type *f2fs_fs_type;
-
-	ret = kstrtoul(skip_spaces(buf), 0, &t);
-	if (ret)
-		return ret;
-	if (t > 4)
-		return -EINVAL;
-
-	WRITE_ONCE(f2fs_min_folio_order_cap, (u32)t);
-
-	f2fs_fs_type = get_fs_type("f2fs");
-	if (f2fs_fs_type) {
-		iterate_supers_type(f2fs_fs_type,
-				    f2fs_apply_global_folio_order_caps, NULL);
-		put_filesystem(f2fs_fs_type);
-	}
-	return count;
-}
-
-static ssize_t f2fs_max_folio_order_cap_store(struct kobject *kobj,
-				     struct kobj_attribute *attr,
-				     const char *buf, size_t count)
-{
-	unsigned long t;
-	int ret;
-	struct file_system_type *f2fs_fs_type;
-
-	ret = kstrtoul(skip_spaces(buf), 0, &t);
-	if (ret)
-		return ret;
-	if (t > 4)
-		return -EINVAL;
-
-	WRITE_ONCE(f2fs_max_folio_order_cap, (u32)t);
-
-	f2fs_fs_type = get_fs_type("f2fs");
-	if (f2fs_fs_type) {
-		iterate_supers_type(f2fs_fs_type,
-				    f2fs_apply_global_folio_order_caps, NULL);
-		put_filesystem(f2fs_fs_type);
-	}
-	return count;
-}
-
 static ssize_t large_folio_dirty_mode_show(struct f2fs_attr *a,
 		struct f2fs_sb_info *sbi, char *buf)
 {
@@ -644,6 +570,14 @@ out:
 		if (t > 1)
 			return -EINVAL;
 		*ui = t;
+		return count;
+	}
+
+	if (!strcmp(a->attr.name, "min_folio_order_cap") ||
+	    !strcmp(a->attr.name, "max_folio_order_cap")) {
+		if (t > 4)
+			return -EINVAL;
+		*ui = (unsigned int)t;
 		return count;
 	}
 
@@ -1321,6 +1255,8 @@ F2FS_SBI_GENERAL_RW_ATTR(last_age_weight);
 F2FS_SBI_GENERAL_RW_ATTR(max_read_extent_count);
 F2FS_ATTR_OFFSET(F2FS_SBI, large_folio_dirty_mode, 0644,
 		large_folio_dirty_mode_show, large_folio_dirty_mode_store, 0);
+F2FS_SBI_GENERAL_RW_ATTR(min_folio_order_cap);
+F2FS_SBI_GENERAL_RW_ATTR(max_folio_order_cap);
 #ifdef CONFIG_BLK_DEV_ZONED
 F2FS_SBI_GENERAL_RO_ATTR(unusable_blocks_per_sec);
 F2FS_SBI_GENERAL_RW_ATTR(blkzone_alloc_policy);
@@ -1531,6 +1467,8 @@ static struct attribute *f2fs_attrs[] = {
 	ATTR_LIST(allocate_section_hint),
 	ATTR_LIST(allocate_section_policy),
 	ATTR_LIST(large_folio_dirty_mode),
+	ATTR_LIST(min_folio_order_cap),
+	ATTR_LIST(max_folio_order_cap),
 	NULL,
 };
 ATTRIBUTE_GROUPS(f2fs);
@@ -1969,15 +1907,6 @@ next:
 	return 0;
 }
 
-static struct kobj_attribute f2fs_min_folio_order_cap_attr =
-	__ATTR(min_folio_order_cap, 0644,
-	       f2fs_min_folio_order_cap_show,
-	       f2fs_min_folio_order_cap_store);
-
-static struct kobj_attribute f2fs_max_folio_order_cap_attr =
-	__ATTR(max_folio_order_cap, 0644,
-	       f2fs_max_folio_order_cap_show,
-	       f2fs_max_folio_order_cap_store);
 
 #ifdef CONFIG_F2FS_FAULT_INJECTION
 static int __maybe_unused inject_stats_seq_show(struct seq_file *seq,
@@ -2017,29 +1946,14 @@ int __init f2fs_init_sysfs(void)
 	if (ret)
 		goto put_kobject;
 
-	ret = sysfs_create_file(&f2fs_kset.kobj,
-				&f2fs_min_folio_order_cap_attr.attr);
-	if (ret)
-		goto global_err;
-
-	ret = sysfs_create_file(&f2fs_kset.kobj,
-				&f2fs_max_folio_order_cap_attr.attr);
-	if (ret)
-		goto global_err;
-
 	f2fs_proc_root = proc_mkdir("fs/f2fs", NULL);
 	if (!f2fs_proc_root) {
 		ret = -ENOMEM;
-		goto global_err;
+		goto put_kobject;
 	}
 
 	return 0;
 
-global_err:
-	sysfs_remove_file(&f2fs_kset.kobj,
-			  &f2fs_min_folio_order_cap_attr.attr);
-	sysfs_remove_file(&f2fs_kset.kobj,
-			  &f2fs_max_folio_order_cap_attr.attr);
 put_kobject:
 	kobject_put(&f2fs_tune);
 	kobject_put(&f2fs_feat);
@@ -2049,10 +1963,6 @@ put_kobject:
 
 void f2fs_exit_sysfs(void)
 {
-	sysfs_remove_file(&f2fs_kset.kobj,
-			  &f2fs_min_folio_order_cap_attr.attr);
-	sysfs_remove_file(&f2fs_kset.kobj,
-			  &f2fs_max_folio_order_cap_attr.attr);
 	kobject_put(&f2fs_tune);
 	kobject_put(&f2fs_feat);
 	kset_unregister(&f2fs_kset);
