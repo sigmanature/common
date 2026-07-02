@@ -28,6 +28,8 @@
 #include <linux/memremap.h>
 #include <linux/percpu.h>
 #include <linux/cpu.h>
+#include <linux/static_key.h>
+#include <linux/sysctl.h>
 #include <linux/notifier.h>
 #include <linux/backing-dev.h>
 #include <linux/memcontrol.h>
@@ -1092,7 +1094,16 @@ void folio_batch_remove_exceptionals(struct folio_batch *fbatch)
 	fbatch->nr = j;
 }
 
+DEFINE_STATIC_KEY_TRUE(lru_cache_large_folios_key);
+
 static const struct ctl_table swap_sysctl_table[] = {
+	{
+		.procname	= "lru_cache_large_folios",
+		.data		= &lru_cache_large_folios_key.key,
+		.maxlen		= sizeof(lru_cache_large_folios_key),
+		.mode		= 0644,
+		.proc_handler	= proc_do_static_key,
+	},
 	{
 		.procname	= "page-cluster",
 		.data		= &page_cluster,

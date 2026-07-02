@@ -70,6 +70,12 @@
 #include "internal.h"
 #include "swap.h"
 
+/* per-cpu alloc stall reason from page_alloc.c */
+#define ALLOC_STALL_REASON_NONE		0
+#define ALLOC_STALL_REASON_WMARK	1
+#define ALLOC_STALL_REASON_FRAGMENT	2
+DECLARE_PER_CPU(int, last_alloc_stall_reason);
+
 #define CREATE_TRACE_POINTS
 #include <trace/events/vmscan.h>
 
@@ -6403,8 +6409,14 @@ retry:
 	delayacct_freepages_start();
 
 	if (!cgroup_reclaim(sc)) {
+		int reason = __this_cpu_read(last_alloc_stall_reason);
+
 		trace_direct_reclaim(sc->order, sc->gfp_mask);
 		__count_zid_vm_events(ALLOCSTALL, sc->reclaim_idx, 1);
+		if (reason == ALLOC_STALL_REASON_WMARK)
+			count_vm_event(ALLOC_STALL_WMARK);
+		else if (reason == ALLOC_STALL_REASON_FRAGMENT)
+			count_vm_event(ALLOC_STALL_FRAGMENT);
 	}
 
 	do {

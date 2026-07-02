@@ -13,6 +13,7 @@
 #include <linux/pagemap.h>
 #include <linux/atomic.h>
 #include <linux/page-flags.h>
+#include <linux/static_key.h>
 #include <uapi/linux/mempolicy.h>
 #include <asm/page.h>
 
@@ -349,11 +350,15 @@ void folio_mark_accessed(struct folio *);
 
 static inline bool folio_may_be_lru_cached(struct folio *folio)
 {
+	DECLARE_STATIC_KEY_TRUE(lru_cache_large_folios_key);
+
 	/*
 	 * Holding PMD-sized folios in per-CPU LRU cache unbalances accounting.
 	 * Holding small numbers of low-order mTHP folios in per-CPU LRU cache
-	 * will be sensible, but nobody has implemented and tested that yet.
+	 * will be sensible.
 	 */
+	if (static_branch_likely(&lru_cache_large_folios_key))
+		return folio_order(folio) < PAGE_ALLOC_COSTLY_ORDER;
 	return !folio_test_large(folio);
 }
 
