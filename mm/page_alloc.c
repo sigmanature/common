@@ -4749,10 +4749,21 @@ restart:
 	if (page)
 		goto got_pg;
 
-	if (order == 2 && can_compact) {
-		wakeup_kcompactd(ac->preferred_zoneref->zone->zone_pgdat,
-				order, ac->highest_zoneidx);
-		count_vm_event(KCOMPACTD_WAKE_ALLOC_SLOWPATH);
+	if (order == 2 && can_compact && sysctl_compact_order2_alloc_wake) {
+		struct zone *zone = ac->preferred_zoneref->zone;
+		unsigned long nr_free_o2 = 0;
+		unsigned int i;
+
+		for (i = 2; i < NR_PAGE_ORDERS; i++)
+			nr_free_o2 += zone->free_area[i].nr_free << (i - 2);
+
+		if (nr_free_o2 < sysctl_compact_order2_alloc_wake) {
+			set_bit(KCOMPACTD_WAKE_REASON_ALLOC,
+				&kcompactd_wake_reasons_bitmap);
+			wakeup_kcompactd(zone->zone_pgdat,
+					order, ac->highest_zoneidx);
+			count_vm_event(KCOMPACTD_WAKE_ALLOC_SLOWPATH);
+		}
 	}
 
 	/*

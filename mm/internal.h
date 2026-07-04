@@ -1658,4 +1658,11 @@ static inline bool reclaim_pt_is_enabled(unsigned long start, unsigned long end,
 void dup_mm_exe_file(struct mm_struct *mm, struct mm_struct *oldmm);
 int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm);
 
+/* kcompactd wake reason bits for kcompactd_wake_reasons_bitmap */
+#define KCOMPACTD_WAKE_REASON_ALLOC	0
+#define KCOMPACTD_WAKE_REASON_VMSCAN	1
+extern unsigned long kcompactd_wake_reasons_bitmap;
+extern unsigned long sysctl_compact_order2_threshold;
+extern unsigned long sysctl_compact_order2_alloc_wake;
+
 #endif	/* __MM_INTERNAL_H */

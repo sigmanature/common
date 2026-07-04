@@ -7220,6 +7220,8 @@ out:
 		 * As there is now likely space, wakeup kcompact to defragment
 		 * pageblocks.
 		 */
+		set_bit(KCOMPACTD_WAKE_REASON_VMSCAN,
+			&kcompactd_wake_reasons_bitmap);
 		wakeup_kcompactd(pgdat, pageblock_order, highest_zoneidx);
 		count_vm_event(KCOMPACTD_WAKE_VMSCAN);
 	}
@@ -7284,6 +7286,8 @@ static void kswapd_try_to_sleep(pg_data_t *pgdat, int alloc_order, int reclaim_o
 		 * We have freed the memory, now we should compact it to make
 		 * allocation of the requested order possible.
 		 */
+		set_bit(KCOMPACTD_WAKE_REASON_VMSCAN,
+			&kcompactd_wake_reasons_bitmap);
 		wakeup_kcompactd(pgdat, alloc_order, highest_zoneidx);
 		count_vm_event(KCOMPACTD_WAKE_VMSCAN);
 
@@ -7468,6 +7472,8 @@ void wakeup_kswapd(struct zone *zone, gfp_t gfp_flags, int order,
 		 * ratelimit its work.
 		 */
 		if (!(gfp_flags & __GFP_DIRECT_RECLAIM)) {
+			set_bit(KCOMPACTD_WAKE_REASON_VMSCAN,
+				&kcompactd_wake_reasons_bitmap);
 			wakeup_kcompactd(pgdat, order, highest_zoneidx);
 			count_vm_event(KCOMPACTD_WAKE_VMSCAN);
 		}
