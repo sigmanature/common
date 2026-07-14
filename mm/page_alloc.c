@@ -56,11 +56,15 @@
 #include <linux/khugepaged.h>
 #include <linux/delayacct.h>
 #include <linux/cacheinfo.h>
+#include <linux/mthp_alloc_counter.h>
 #include <linux/pgalloc_tag.h>
 #include <asm/div64.h>
 #include "internal.h"
 #include "shuffle.h"
 #include "page_reporting.h"
+
+/* Proactive kswapd wakeup threshold for order-2 (defined in mm/vmscan.c). */
+extern int kswapd_order2_wakeup_threshold;
 
 /* Free Page Internal flags: for internal, non-pcp variants of free_pages(). */
 typedef int __bitwise fpi_t;
@@ -3665,8 +3669,18 @@ static inline bool zone_watermark_fast_raw(struct zone *z, unsigned int order,
 	if (unlikely(!order && (alloc_flags & ALLOC_MIN_RESERVE) && z->watermark_boost
 		&& ((alloc_flags & ALLOC_WMARK_MASK) == WMARK_MIN))) {
 		mark = z->_watermark[WMARK_MIN];
-		return __zone_watermark_ok_raw(z, order, mark, highest_zoneidx,
-					alloc_flags, free_pages, direct_reclaim);
+		if (__zone_watermark_ok_raw(z, order, mark, highest_zoneidx,
+					alloc_flags, free_pages, direct_reclaim))
+			return true;
+	}
+
+	if (direct_reclaim) {
+		int reason = __this_cpu_read(last_alloc_stall_reason);
+
+		if (reason == ALLOC_STALL_REASON_WMARK)
+			mthp_count_alloc_fail_source(gfp_mask, true);
+		else if (reason == ALLOC_STALL_REASON_FRAGMENT)
+			mthp_count_alloc_fail_source(gfp_mask, false);
 	}
 
 	return false;
@@ -3904,6 +3918,24 @@ check_alloc_wmark:
 		}
 
 try_this_zone:
+		/*
+		 * Proactively wake kswapd if order-2 free blocks are running low.
+		 * The sysctl defaults to 0, so this is inactive unless explicitly
+		 * enabled for the experiment.
+		 */
+		if (order == 2 && kswapd_order2_wakeup_threshold &&
+		    (alloc_flags & ALLOC_KSWAPD)) {
+			unsigned long nr_free_order2 = 0;
+			int free_order;
+
+			for (free_order = 2; free_order < NR_PAGE_ORDERS; free_order++)
+				nr_free_order2 += zone->free_area[free_order].nr_free <<
+						  (free_order - 2);
+			if (nr_free_order2 < kswapd_order2_wakeup_threshold)
+				wakeup_kswapd(zone, gfp_mask, order,
+					      ac->highest_zoneidx);
+		}
+
 		page = rmqueue(zonelist_zone(ac->preferred_zoneref), zone, order,
 				gfp_mask, alloc_flags, ac->migratetype);
 		if (page) {

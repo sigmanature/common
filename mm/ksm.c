@@ -40,6 +40,7 @@
 #include <linux/oom.h>
 #include <linux/numa.h>
 #include <linux/pagewalk.h>
+#include <linux/mthp_alloc_counter.h>
 
 #include <asm/tlbflush.h>
 #include "internal.h"
@@ -3085,7 +3086,8 @@ struct folio *ksm_might_need_to_copy(struct folio *folio,
 	if (!folio_test_uptodate(folio))
 		return folio;		/* let do_swap_page report the error */
 
-	new_folio = vma_alloc_folio(GFP_HIGHUSER_MOVABLE, 0, vma, addr);
+	new_folio = mthp_vma_alloc_folio_counted(GFP_HIGHUSER_MOVABLE, 0, vma,
+					  addr, MTHP_VMA_ALLOC_KSM_COPY);
 	if (new_folio &&
 	    mem_cgroup_charge(new_folio, vma->vm_mm, GFP_KERNEL)) {
 		folio_put(new_folio);

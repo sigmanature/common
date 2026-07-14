@@ -48,6 +48,7 @@
 #include <linux/rcupdate_wait.h>
 #include <linux/sched/mm.h>
 #include <linux/sysctl.h>
+#include <linux/mthp_alloc_counter.h>
 #include <asm/pgalloc.h>
 #include <asm/tlbflush.h>
 #include "internal.h"
@@ -1006,6 +1007,9 @@ struct folio *filemap_alloc_folio_noprof(gfp_t gfp, unsigned int order)
 {
 	int n;
 	struct folio *folio;
+	bool tagged = gfp & __GFP_MTHP_SRC_FILE;
+
+	gfp = mthp_gfp_source_file(gfp);
 
 	if (cpuset_do_page_mem_spread()) {
 		unsigned int cpuset_mems_cookie;
@@ -1015,12 +1019,26 @@ struct folio *filemap_alloc_folio_noprof(gfp_t gfp, unsigned int order)
 			folio = __folio_alloc_node_noprof(gfp, order, n);
 		} while (!folio && read_mems_allowed_retry(cpuset_mems_cookie));
 
+		if (folio && !tagged)
+			mthp_count_file_alloc(order, MTHP_FILE_ALLOC_UNKNOWN);
 		return folio;
 	}
-	return folio_alloc_noprof(gfp, order);
+	folio = folio_alloc_noprof(gfp, order);
+	if (folio && !tagged)
+		mthp_count_file_alloc(order, MTHP_FILE_ALLOC_UNKNOWN);
+	return folio;
 }
 EXPORT_SYMBOL(filemap_alloc_folio_noprof);
 #endif
+
+static enum mthp_file_alloc_source mthp_file_getfolio_source(fgf_t fgp_flags)
+{
+	if (fgp_flags & FGP_FOR_MMAP)
+		return MTHP_FILE_ALLOC_GETFOLIO_MMAP;
+	if (fgp_flags & FGP_WRITE)
+		return MTHP_FILE_ALLOC_GETFOLIO_WRITE;
+	return MTHP_FILE_ALLOC_GETFOLIO_OTHER;
+}
 
 /*
  * filemap_invalidate_lock_two - lock invalidate_lock for two mappings
@@ -2009,7 +2027,8 @@ no_page:
 			err = -ENOMEM;
 			if (order > min_order)
 				alloc_gfp |= __GFP_NORETRY | __GFP_NOWARN;
-			folio = filemap_alloc_folio(alloc_gfp, order);
+			folio = mthp_file_alloc_folio_counted(alloc_gfp, order,
+					mthp_file_getfolio_source(fgp_flags));
 			if (!folio)
 				continue;
 
@@ -2609,7 +2628,8 @@ static int filemap_create_folio(struct kiocb *iocb, struct folio_batch *fbatch)
 	if (iocb->ki_flags & (IOCB_NOWAIT | IOCB_WAITQ))
 		return -EAGAIN;
 
-	folio = filemap_alloc_folio(mapping_gfp_mask(mapping), min_order);
+	folio = mthp_file_alloc_folio_counted(mapping_gfp_mask(mapping),
+			min_order, MTHP_FILE_ALLOC_BUFFERED_READ);
 	if (!folio)
 		return -ENOMEM;
 	if (iocb->ki_flags & IOCB_DONTCACHE)
@@ -4054,8 +4074,9 @@ static struct folio *do_read_cache_folio(struct address_space *mapping,
 repeat:
 	folio = filemap_get_folio(mapping, index);
 	if (IS_ERR(folio)) {
-		folio = filemap_alloc_folio(gfp,
-					    mapping_min_folio_order(mapping));
+		folio = mthp_file_alloc_folio_counted(gfp,
+					    mapping_min_folio_order(mapping),
+					    MTHP_FILE_ALLOC_READ_CACHE);
 		if (!folio)
 			return ERR_PTR(-ENOMEM);
 		index = mapping_align_index(mapping, index);

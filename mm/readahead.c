@@ -128,6 +128,7 @@
 #include <linux/blk-cgroup.h>
 #include <linux/fadvise.h>
 #include <linux/sched/mm.h>
+#include <linux/mthp_alloc_counter.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/readahead.h>
@@ -189,7 +190,8 @@ static struct folio *ractl_alloc_folio(struct readahead_control *ractl,
 {
 	struct folio *folio;
 
-	folio = filemap_alloc_folio(gfp_mask, order);
+	folio = mthp_file_alloc_folio_counted(gfp_mask, order,
+					    MTHP_FILE_ALLOC_READAHEAD);
 	if (folio && ractl->dropbehind)
 		__folio_set_dropbehind(folio);
 

@@ -44,6 +44,7 @@
 #include <linux/fs.h>
 #include <linux/mm.h>
 #include <linux/mm_inline.h>
+#include <linux/mthp_alloc_counter.h>
 #include <linux/memblock.h>
 #include <linux/nsproxy.h>
 #include <linux/capability.h>
@@ -319,6 +320,7 @@ static int alloc_thread_stack_node(struct task_struct *tsk, int node)
 				     node, __builtin_return_address(0));
 	if (!stack)
 		return -ENOMEM;
+	mthp_count_fork_vmap_stack_pages(THREAD_SIZE / PAGE_SIZE);
 
 	vm_area = find_vm_area(stack);
 	if (memcg_charge_kernel_stack(vm_area)) {
@@ -372,6 +374,7 @@ static int alloc_thread_stack_node(struct task_struct *tsk, int node)
 
 	if (likely(page)) {
 		tsk->stack = kasan_reset_tag(page_address(page));
+		mthp_count_fork_nonvmap_stack_pages(1U << THREAD_SIZE_ORDER);
 		return 0;
 	}
 	return -ENOMEM;
@@ -881,6 +884,7 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
 	tsk = alloc_task_struct_node(node);
 	if (!tsk)
 		return NULL;
+	mthp_count_fork_dup_task_struct();
 
 	err = arch_dup_task_struct(tsk, orig);
 	if (err)

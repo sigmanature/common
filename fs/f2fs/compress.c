@@ -14,6 +14,7 @@
 #include <linux/lz4.h>
 #include <linux/zstd.h>
 #include <linux/pagevec.h>
+#include <linux/mthp_alloc_counter.h>
 
 #include "f2fs.h"
 #include "node.h"
@@ -1949,7 +1950,8 @@ static void f2fs_cache_compressed_page(struct f2fs_sb_info *sbi,
 		return;
 	}
 
-	cfolio = filemap_alloc_folio(__GFP_NOWARN | __GFP_IO, 0);
+	cfolio = mthp_file_alloc_folio_counted(__GFP_NOWARN | __GFP_IO, 0,
+					    MTHP_FILE_ALLOC_F2FS_COMPRESS);
 	if (!cfolio)
 		return;
 

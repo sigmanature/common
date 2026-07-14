@@ -43,6 +43,7 @@
 #include <asm/tlbflush.h>
 #include <asm/shmparam.h>
 #include <linux/page_owner.h>
+#include <linux/mthp_alloc_counter.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/vmalloc.h>
@@ -3629,6 +3630,7 @@ vm_area_alloc_pages(gfp_t gfp, int nid,
 							pages + nr_allocated);
 
 			nr_allocated += nr;
+			mthp_count_residual_order0_pages(MTHP_RESIDUAL_ORDER0_VMALLOC, nr);
 
 			/*
 			 * If zero or pages were obtained partly,
@@ -3651,6 +3653,8 @@ vm_area_alloc_pages(gfp_t gfp, int nid,
 
 		if (unlikely(!page))
 			break;
+		if (!order)
+			mthp_count_residual_order0(MTHP_RESIDUAL_ORDER0_VMALLOC);
 
 		/*
 		 * High-order allocations must be able to be treated as

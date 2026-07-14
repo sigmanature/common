@@ -38,6 +38,7 @@
 #include <linux/zsmalloc.h>
 #include <linux/fs.h>
 #include <linux/workqueue.h>
+#include <linux/mthp_alloc_counter.h>
 #include "zpdesc.h"
 
 #define ZSPAGE_MAGIC	0x58
@@ -258,6 +259,8 @@ static inline void zpdesc_dec_zone_page_state(struct zpdesc *zpdesc)
 static inline struct zpdesc *alloc_zpdesc(gfp_t gfp, const int nid)
 {
 	struct page *page = alloc_pages_node(nid, gfp, 0);
+	if (page)
+		mthp_count_zsmalloc_order(0);
 
 	return page_zpdesc(page);
 }
@@ -1046,8 +1049,10 @@ static struct zspage *alloc_zspage(struct zs_pool *pool,
 			struct page *page;
 
 			gfp &= ~__GFP_MOVABLE;
-			page = alloc_pages_node(nid, gfp | __GFP_COMP, order);
-			zpdesc = page ? page_zpdesc(page) : NULL;
+				page = alloc_pages_node(nid, gfp | __GFP_COMP, order);
+				if (page)
+					mthp_count_zsmalloc_order(order);
+				zpdesc = page ? page_zpdesc(page) : NULL;
 		} else {
 			zpdesc = alloc_zpdesc(gfp, nid);
 		}

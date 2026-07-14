@@ -7,7 +7,8 @@
 
 #include <linux/mm.h>
 #include <linux/huge_mm.h>
-#include <linux/percpu.h>
+#include <linux/init.h>
+#include <linux/moduleparam.h>
 #include <linux/sched/signal.h>
 #include <linux/pagemap.h>
 #include <linux/rmap.h>
@@ -16,11 +17,19 @@
 #include <linux/userfaultfd_k.h>
 #include <linux/mmu_notifier.h>
 #include <linux/hugetlb.h>
+#include <linux/mthp_alloc_counter.h>
 #include <linux/shmem_fs.h>
 #include <asm/tlbflush.h>
 #include <asm/tlb.h>
 #include "internal.h"
 #include "swap.h"
+
+#define UFFD_MFILL_ORDER2_ORDER 2
+#define UFFD_MFILL_ORDER2_NR (1UL << UFFD_MFILL_ORDER2_ORDER)
+#define UFFD_MFILL_ORDER2_SIZE (PAGE_SIZE << UFFD_MFILL_ORDER2_ORDER)
+
+static bool uffd_mfill_order2_enabled;
+core_param(uffd_mfill_order2, uffd_mfill_order2_enabled, bool, 0600);
 
 static __always_inline
 bool validate_dst_vma(struct vm_area_struct *dst_vma, unsigned long dst_end)
@@ -168,9 +177,9 @@ static bool mfill_file_over_size(struct vm_area_struct *dst_vma,
  * and anon, and for both shared and private VMAs.
  */
 int mfill_atomic_install_pte(pmd_t *dst_pmd,
-			     struct vm_area_struct *dst_vma,
-			     unsigned long dst_addr, struct page *page,
-			     bool newly_allocated, uffd_flags_t flags)
+				     struct vm_area_struct *dst_vma,
+				     unsigned long dst_addr, struct page *page,
+				     bool newly_allocated, uffd_flags_t flags)
 {
 	int ret;
 	struct mm_struct *dst_mm = dst_vma->vm_mm;
@@ -236,9 +245,163 @@ out:
 	return ret;
 }
 
+static bool mfill_atomic_order2_pte_none(pte_t *dst_pte)
+{
+	unsigned long i;
+
+	for (i = 0; i < UFFD_MFILL_ORDER2_NR; i++) {
+		if (!pte_none_mostly(ptep_get(dst_pte + i)))
+			return false;
+	}
+
+	return true;
+}
+
+static bool mfill_atomic_order2_range_ok(struct vm_area_struct *dst_vma,
+						 unsigned long dst_addr,
+						 unsigned long src_addr,
+						 unsigned long end,
+						 uffd_flags_t flags)
+{
+	bool is_copy = uffd_flags_mode_is(flags, MFILL_ATOMIC_COPY);
+	bool is_zeropage = uffd_flags_mode_is(flags, MFILL_ATOMIC_ZEROPAGE);
+
+	if (!uffd_mfill_order2_enabled)
+		return false;
+	if (!is_copy && !is_zeropage)
+		return false;
+	if (vma_is_shmem(dst_vma) || dst_vma->vm_flags & VM_SHARED) {
+		return false;
+	}
+	if (dst_addr + UFFD_MFILL_ORDER2_SIZE > end) {
+		return false;
+	}
+	if (!IS_ALIGNED(dst_addr, UFFD_MFILL_ORDER2_SIZE)) {
+		return false;
+	}
+	if (is_copy && !IS_ALIGNED(src_addr, UFFD_MFILL_ORDER2_SIZE)) {
+		return false;
+	}
+
+	return true;
+}
+
+static int mfill_atomic_copy_order2_folio(struct folio *folio,
+						  unsigned long src_addr)
+{
+	unsigned long i;
+	int ret = 0;
+
+	pagefault_disable();
+	for (i = 0; i < UFFD_MFILL_ORDER2_NR; i++) {
+		void *kaddr = kmap_local_folio(folio, i * PAGE_SIZE);
+
+		ret = copy_from_user(kaddr,
+				     (const void __user *)(src_addr + i * PAGE_SIZE),
+				     PAGE_SIZE);
+		kunmap_local(kaddr);
+		if (unlikely(ret))
+			break;
+	}
+	pagefault_enable();
+
+	return ret ? -EFAULT : 0;
+}
+
+static ssize_t mfill_atomic_pte_order2(pmd_t *dst_pmd,
+					       struct vm_area_struct *dst_vma,
+					       unsigned long dst_addr,
+					       unsigned long src_addr,
+					       unsigned long end,
+					       uffd_flags_t flags)
+{
+	struct mm_struct *dst_mm = dst_vma->vm_mm;
+	bool is_copy = uffd_flags_mode_is(flags, MFILL_ATOMIC_COPY);
+	bool is_zeropage = uffd_flags_mode_is(flags, MFILL_ATOMIC_ZEROPAGE);
+	struct folio *folio;
+	spinlock_t *ptl;
+	pte_t entry, *dst_pte;
+	int ret;
+
+	if (!mfill_atomic_order2_range_ok(dst_vma, dst_addr, src_addr, end,
+					       flags))
+		return 0;
+
+	if (is_copy)
+		count_vm_event(UFFD_MFILL_ORDER2_ATTEMPT_COPY);
+	else
+		count_vm_event(UFFD_MFILL_ORDER2_ATTEMPT_ZEROPAGE);
+
+	folio = mthp_vma_alloc_folio_counted(GFP_HIGHUSER_MOVABLE,
+			       UFFD_MFILL_ORDER2_ORDER, dst_vma, dst_addr,
+			       is_copy ? MTHP_VMA_ALLOC_UFFD_COPY :
+			       MTHP_VMA_ALLOC_UFFD_ZEROPAGE);
+	if (!folio) {
+		return 0;
+	}
+
+	if (is_copy) {
+		ret = mfill_atomic_copy_order2_folio(folio, src_addr);
+		if (ret) {
+			folio_put(folio);
+			return 0;
+		}
+	} else if (is_zeropage) {
+		folio_zero_range(folio, 0, UFFD_MFILL_ORDER2_SIZE);
+	} else {
+		folio_put(folio);
+		return 0;
+	}
+
+	__folio_mark_uptodate(folio);
+
+	if (mem_cgroup_charge(folio, dst_mm, GFP_KERNEL)) {
+		folio_put(folio);
+		return 0;
+	}
+
+	entry = folio_mk_pte(folio, dst_vma->vm_page_prot);
+	entry = pte_mkdirty(entry);
+	if (dst_vma->vm_flags & VM_WRITE)
+		entry = pte_mkwrite(entry, dst_vma);
+	if (flags & MFILL_ATOMIC_WP)
+		entry = pte_mkuffd_wp(entry);
+
+	dst_pte = pte_offset_map_lock(dst_mm, dst_pmd, dst_addr, &ptl);
+	if (!dst_pte) {
+		folio_put(folio);
+		return -EAGAIN;
+	}
+
+	ret = -EEXIST;
+	if (!mfill_atomic_order2_pte_none(dst_pte)) {
+		ret = 0;
+		goto out_unlock;
+	}
+
+	folio_ref_add(folio, UFFD_MFILL_ORDER2_NR - 1);
+	add_mm_counter(dst_mm, MM_ANONPAGES, UFFD_MFILL_ORDER2_NR);
+	folio_add_new_anon_rmap(folio, dst_vma, dst_addr, RMAP_EXCLUSIVE);
+	folio_add_lru_vma(folio, dst_vma);
+	set_ptes(dst_mm, dst_addr, dst_pte, entry, UFFD_MFILL_ORDER2_NR);
+	update_mmu_cache_range(NULL, dst_vma, dst_addr, dst_pte,
+			       UFFD_MFILL_ORDER2_NR);
+
+	if (is_copy)
+		count_vm_event(UFFD_MFILL_ORDER2_SUCCESS_COPY);
+	else
+		count_vm_event(UFFD_MFILL_ORDER2_SUCCESS_ZEROPAGE);
+	ret = UFFD_MFILL_ORDER2_SIZE;
+out_unlock:
+	pte_unmap_unlock(dst_pte, ptl);
+	if (ret <= 0)
+		folio_put(folio);
+	return ret;
+}
+
 static int mfill_atomic_pte_copy(pmd_t *dst_pmd,
-				 struct vm_area_struct *dst_vma,
-				 unsigned long dst_addr,
+					 struct vm_area_struct *dst_vma,
+					 unsigned long dst_addr,
 				 unsigned long src_addr,
 				 uffd_flags_t flags,
 				 struct folio **foliop)
@@ -249,8 +412,9 @@ static int mfill_atomic_pte_copy(pmd_t *dst_pmd,
 
 	if (!*foliop) {
 		ret = -ENOMEM;
-		folio = vma_alloc_folio(GFP_HIGHUSER_MOVABLE, 0, dst_vma,
-					dst_addr);
+		folio = mthp_vma_alloc_folio_counted(GFP_HIGHUSER_MOVABLE, 0,
+					dst_vma, dst_addr,
+					MTHP_VMA_ALLOC_UFFD_COPY);
 		if (!folio)
 			goto out;
 
@@ -305,6 +469,7 @@ static int mfill_atomic_pte_copy(pmd_t *dst_pmd,
 				       &folio->page, true, flags);
 	if (ret)
 		goto out_release;
+	count_vm_event(UFFD_MFILL_ORDER0_SUCCESS_COPY);
 out:
 	return ret;
 out_release:
@@ -319,7 +484,8 @@ static int mfill_atomic_pte_zeroed_folio(pmd_t *dst_pmd,
 	struct folio *folio;
 	int ret = -ENOMEM;
 
-	folio = vma_alloc_zeroed_movable_folio(dst_vma, dst_addr);
+	folio = mthp_vma_alloc_zeroed_movable_folio_counted(dst_vma, dst_addr,
+					MTHP_VMA_ALLOC_UFFD_ZEROPAGE);
 	if (!folio)
 		return ret;
 
@@ -337,6 +503,7 @@ static int mfill_atomic_pte_zeroed_folio(pmd_t *dst_pmd,
 				       &folio->page, true, 0);
 	if (ret)
 		goto out_put;
+	count_vm_event(UFFD_MFILL_ORDER0_SUCCESS_ZEROPAGE);
 
 	return 0;
 out_put:
@@ -810,6 +977,25 @@ retry:
 		 * For shmem mappings, khugepaged is allowed to remove page
 		 * tables under us; pte_offset_map_lock() will deal with that.
 		 */
+		if (!folio) {
+			err = mfill_atomic_pte_order2(dst_pmd, dst_vma, dst_addr,
+						      src_addr, dst_start + len,
+						      flags);
+			if (err > 0) {
+				dst_addr += err;
+				src_addr += err;
+				copied += err;
+
+				if (fatal_signal_pending(current))
+					err = -EINTR;
+				if (err)
+					break;
+				cond_resched();
+				continue;
+			}
+			if (err < 0)
+				break;
+		}
 
 		err = mfill_atomic_pte(dst_pmd, dst_vma, dst_addr,
 				       src_addr, flags, &folio);

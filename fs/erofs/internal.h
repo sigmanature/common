@@ -451,6 +451,10 @@ static inline void *erofs_vm_map_ram(struct page **pages, unsigned int count)
 	return NULL;
 }
 
+/* global folio order caps, writable via /sys/fs/erofs/ */
+extern unsigned int erofs_min_folio_order_cap;
+extern unsigned int erofs_max_folio_order_cap;
+
 int erofs_register_sysfs(struct super_block *sb);
 void erofs_unregister_sysfs(struct super_block *sb);
 int __init erofs_init_sysfs(void);

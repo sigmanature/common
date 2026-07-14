@@ -96,6 +96,56 @@ DEFINE_EVENT(migration_pmd, remove_migration_pmd,
 	TP_PROTO(unsigned long addr, unsigned long pmd),
 	TP_ARGS(addr, pmd)
 );
+
+TRACE_EVENT(mthp_anon_suitable_fallback,
+
+	TP_PROTO(pid_t pid, pid_t tgid, const char *comm,
+		 const char *leader_comm, unsigned long addr,
+		 unsigned long haddr, unsigned long vma_start,
+		 unsigned long vma_end, unsigned long vm_flags,
+		 int vma_class, int subreason, const char *anon_name),
+
+	TP_ARGS(pid, tgid, comm, leader_comm, addr, haddr, vma_start,
+		vma_end, vm_flags, vma_class, subreason, anon_name),
+
+	TP_STRUCT__entry(
+		__field(pid_t, pid)
+		__field(pid_t, tgid)
+		__string(comm, comm)
+		__string(leader_comm, leader_comm)
+		__field(unsigned long, addr)
+		__field(unsigned long, haddr)
+		__field(unsigned long, vma_start)
+		__field(unsigned long, vma_end)
+		__field(unsigned long, vm_flags)
+		__field(int, vma_class)
+		__field(int, subreason)
+		__string(anon_name, anon_name)
+	),
+
+	TP_fast_assign(
+		__entry->pid = pid;
+		__entry->tgid = tgid;
+		__assign_str(comm);
+		__assign_str(leader_comm);
+		__entry->addr = addr;
+		__entry->haddr = haddr;
+		__entry->vma_start = vma_start;
+		__entry->vma_end = vma_end;
+		__entry->vm_flags = vm_flags;
+		__entry->vma_class = vma_class;
+		__entry->subreason = subreason;
+		__assign_str(anon_name);
+	),
+
+	TP_printk("pid=%d tgid=%d comm=%s leader=%s addr=%lx haddr=%lx vma=%lx-%lx size=%lu flags=%lx class=%d subreason=%d anon_name=%s",
+		__entry->pid, __entry->tgid, __get_str(comm),
+		__get_str(leader_comm), __entry->addr, __entry->haddr,
+		__entry->vma_start, __entry->vma_end,
+		__entry->vma_end - __entry->vma_start, __entry->vm_flags,
+		__entry->vma_class, __entry->subreason,
+		__get_str(anon_name))
+);
 #endif /* _TRACE_THP_H */
 
 /* This part must be outside protection */

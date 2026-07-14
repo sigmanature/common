@@ -13,6 +13,7 @@
 #include <linux/mm.h>
 #include <linux/swap.h> /* mm_account_reclaimed_pages() */
 #include <linux/module.h>
+#include <linux/mthp_alloc_counter.h>
 #include <linux/bit_spinlock.h>
 #include <linux/interrupt.h>
 #include <linux/swab.h>
@@ -3091,6 +3092,8 @@ static inline struct slab *alloc_slab_page(gfp_t flags, int node,
 
 	if (!folio)
 		return NULL;
+	if (order == 0)
+		mthp_count_residual_order0(MTHP_RESIDUAL_ORDER0_SLUB_NEW_SLAB);
 
 	slab = folio_slab(folio);
 	__folio_set_slab(folio);

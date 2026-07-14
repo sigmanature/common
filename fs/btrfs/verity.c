@@ -10,6 +10,7 @@
 #include <linux/iversion.h>
 #include <linux/fsverity.h>
 #include <linux/sched/mm.h>
+#include <linux/mthp_alloc_counter.h>
 #include "messages.h"
 #include "ctree.h"
 #include "btrfs_inode.h"
@@ -741,8 +742,9 @@ again:
 		goto out;
 	}
 
-	folio = filemap_alloc_folio(mapping_gfp_constraint(inode->i_mapping, ~__GFP_FS),
-				    0);
+	folio = mthp_file_alloc_folio_counted(
+		mapping_gfp_constraint(inode->i_mapping, ~__GFP_FS), 0,
+		MTHP_FILE_ALLOC_BTRFS);
 	if (!folio)
 		return ERR_PTR(-ENOMEM);
 

@@ -21,6 +21,7 @@
 #include <linux/sched/mm.h>
 #include <linux/log2.h>
 #include <linux/shrinker.h>
+#include <linux/mthp_alloc_counter.h>
 #include <crypto/hash.h>
 #include "misc.h"
 #include "ctree.h"
@@ -491,8 +492,9 @@ static noinline int add_ra_bio_pages(struct inode *inode,
 			continue;
 		}
 
-		folio = filemap_alloc_folio(mapping_gfp_constraint(mapping,
-								   ~__GFP_FS), 0);
+		folio = mthp_file_alloc_folio_counted(mapping_gfp_constraint(mapping,
+								   ~__GFP_FS), 0,
+							 MTHP_FILE_ALLOC_BTRFS);
 		if (!folio)
 			break;
 

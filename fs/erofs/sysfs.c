@@ -15,6 +15,8 @@ enum {
 	attr_pointer_ui,
 	attr_pointer_bool,
 	attr_accel,
+	attr_min_folio_order_cap,
+	attr_max_folio_order_cap,
 };
 
 enum {
@@ -65,6 +67,8 @@ EROFS_ATTR_FUNC(drop_caches, 0200);
 #ifdef CONFIG_EROFS_FS_ZIP_ACCEL
 EROFS_ATTR_FUNC(accel, 0644);
 #endif
+EROFS_ATTR_FUNC(min_folio_order_cap, 0644);
+EROFS_ATTR_FUNC(max_folio_order_cap, 0644);
 EROFS_ATTR_RW_UI(dir_ra_bytes, erofs_sb_info);
 
 static struct attribute *erofs_sb_attrs[] = {
@@ -81,6 +85,8 @@ static struct attribute *erofs_attrs[] = {
 #ifdef CONFIG_EROFS_FS_ZIP_ACCEL
 	ATTR_LIST(accel),
 #endif
+	ATTR_LIST(min_folio_order_cap),
+	ATTR_LIST(max_folio_order_cap),
 	NULL,
 };
 ATTRIBUTE_GROUPS(erofs);
@@ -116,6 +122,9 @@ static struct attribute *erofs_feat_attrs[] = {
 };
 ATTRIBUTE_GROUPS(erofs_feat);
 
+unsigned int erofs_min_folio_order_cap;
+unsigned int erofs_max_folio_order_cap;
+
 static unsigned char *__struct_ptr(struct erofs_sb_info *sbi,
 					  int struct_type, int offset)
 {
@@ -137,6 +146,12 @@ static ssize_t erofs_attr_show(struct kobject *kobj,
 	switch (a->attr_id) {
 	case attr_feature:
 		return sysfs_emit(buf, "supported\n");
+	case attr_min_folio_order_cap:
+		return sysfs_emit(buf, "%u\n",
+					  READ_ONCE(erofs_min_folio_order_cap));
+	case attr_max_folio_order_cap:
+		return sysfs_emit(buf, "%u\n",
+					  READ_ONCE(erofs_max_folio_order_cap));
 	case attr_pointer_ui:
 		if (!ptr)
 			return 0;
@@ -162,6 +177,24 @@ static ssize_t erofs_attr_store(struct kobject *kobj, struct attribute *attr,
 	int ret;
 
 	switch (a->attr_id) {
+	case attr_min_folio_order_cap:
+		ret = kstrtoul(skip_spaces(buf), 0, &t);
+		if (ret)
+			return ret;
+		if (t > READ_ONCE(erofs_max_folio_order_cap))
+			return -EINVAL;
+		WRITE_ONCE(erofs_min_folio_order_cap, t);
+		return len;
+	case attr_max_folio_order_cap:
+		ret = kstrtoul(skip_spaces(buf), 0, &t);
+		if (ret)
+			return ret;
+		if (t > MAX_PAGECACHE_ORDER)
+			return -EINVAL;
+		if (t < READ_ONCE(erofs_min_folio_order_cap))
+			return -EINVAL;
+		WRITE_ONCE(erofs_max_folio_order_cap, t);
+		return len;
 	case attr_pointer_ui:
 		if (!ptr)
 			return 0;
@@ -291,15 +324,22 @@ int __init erofs_init_sysfs(void)
 {
 	int ret;
 
+	erofs_min_folio_order_cap = 2;
+	erofs_max_folio_order_cap = 2;
+
 	kobject_set_name(&erofs_root.kobj, "erofs");
 	erofs_root.kobj.parent = fs_kobj;
 	ret = kset_register(&erofs_root);
-	if (!ret) {
-		ret = kobject_init_and_add(&erofs_feat, &erofs_feat_ktype,
-					   NULL, "features");
-		if (!ret)
-			return 0;
-		erofs_exit_sysfs();
-	}
+	if (ret)
+		return ret;
+
+	ret = kobject_init_and_add(&erofs_feat, &erofs_feat_ktype,
+				   NULL, "features");
+	if (ret)
+		goto out_feat;
+
+	return 0;
+out_feat:
+	erofs_exit_sysfs();
 	return ret;
 }

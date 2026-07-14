@@ -234,7 +234,13 @@ static int erofs_fill_inode(struct inode *inode)
 		return 0;
 	}
 
-	mapping_set_large_folios(inode->i_mapping);
+	{
+		unsigned int min_order = READ_ONCE(erofs_min_folio_order_cap);
+		unsigned int max_order = READ_ONCE(erofs_max_folio_order_cap);
+
+		mapping_set_folio_order_range(inode->i_mapping,
+					      min_order, max_order);
+	}
 	if (erofs_inode_is_data_compressed(vi->datalayout)) {
 #ifdef CONFIG_EROFS_FS_ZIP
 		DO_ONCE_LITE_IF(inode->i_blkbits != PAGE_SHIFT,

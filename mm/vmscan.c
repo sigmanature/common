@@ -51,6 +51,7 @@
 #include <linux/dax.h>
 #include <linux/psi.h>
 #include <linux/pagewalk.h>
+#include <linux/mthp_alloc_counter.h>
 #include <linux/shmem_fs.h>
 #include <linux/ctype.h>
 #include <linux/debugfs.h>
@@ -211,6 +212,8 @@ struct scan_control {
  * From 0 .. MAX_SWAPPINESS.  Higher means more swappy.
  */
 int vm_swappiness = 60;
+int kswapd_order2_threshold;
+int kswapd_order2_wakeup_threshold;
 
 #ifdef CONFIG_MEMCG
 
@@ -6413,10 +6416,13 @@ retry:
 
 		trace_direct_reclaim(sc->order, sc->gfp_mask);
 		__count_zid_vm_events(ALLOCSTALL, sc->reclaim_idx, 1);
-		if (reason == ALLOC_STALL_REASON_WMARK)
+		if (reason == ALLOC_STALL_REASON_WMARK) {
 			count_vm_event(ALLOC_STALL_WMARK);
-		else if (reason == ALLOC_STALL_REASON_FRAGMENT)
+			mthp_count_alloc_stall_source(sc->gfp_mask, true);
+		} else if (reason == ALLOC_STALL_REASON_FRAGMENT) {
 			count_vm_event(ALLOC_STALL_FRAGMENT);
+			mthp_count_alloc_stall_source(sc->gfp_mask, false);
+		}
 	}
 
 	do {
@@ -6821,6 +6827,18 @@ static bool pgdat_watermark_boosted(pg_data_t *pgdat, int highest_zoneidx)
 	return false;
 }
 
+static unsigned long count_free_order_pages(struct zone *zone, int target_order)
+{
+	unsigned long count = 0;
+	int free_order;
+
+	for (free_order = target_order; free_order < NR_PAGE_ORDERS; free_order++)
+		count += zone->free_area[free_order].nr_free <<
+			 (free_order - target_order);
+
+	return count;
+}
+
 /*
  * Returns true if there is an eligible zone balanced for the request order
  * and highest_zoneidx
@@ -6875,9 +6893,20 @@ static bool pgdat_balanced(pg_data_t *pgdat, int order, int highest_zoneidx)
 		if (zone->percpu_drift_mark && free_pages < zone->percpu_drift_mark)
 			free_pages = zone_page_state_snapshot(zone, item);
 
-		if (__zone_watermark_ok(zone, order, mark, highest_zoneidx,
-					0, free_pages))
-			return true;
+		if (!__zone_watermark_ok(zone, order, mark, highest_zoneidx,
+					 0, free_pages))
+			continue;
+
+		/*
+		 * For order-2 requests, optionally require a minimum number of
+		 * order-2-equivalent free blocks before kswapd considers the node
+		 * balanced. The sysctl defaults to 0, preserving existing behavior.
+		 */
+		if (order == 2 && kswapd_order2_threshold &&
+		    count_free_order_pages(zone, 2) < kswapd_order2_threshold)
+			continue;
+
+		return true;
 	}
 
 	/*
@@ -6973,8 +7002,10 @@ static bool kswapd_shrink_node(pg_data_t *pgdat,
 	 * excessive reclaim. Assume that a process requested a high-order
 	 * can direct reclaim/compact.
 	 */
-	if (sc->order && sc->nr_reclaimed >= compact_gap(sc->order))
-		sc->order = 0;
+	if (sc->order && sc->nr_reclaimed >= compact_gap(sc->order)) {
+		if (!(sc->order == 2 && kswapd_order2_threshold))
+			sc->order = 0;
+	}
 
 	/* account for progress from mm_account_reclaimed_pages() */
 	return max(sc->nr_scanned, sc->nr_reclaimed - nr_reclaimed) >= sc->nr_to_reclaim;
@@ -7574,6 +7605,22 @@ static const struct ctl_table vmscan_sysctl_table[] = {
 		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= SYSCTL_ZERO,
 		.extra2		= SYSCTL_TWO_HUNDRED,
+	},
+	{
+		.procname	= "kswapd_order2_threshold",
+		.data		= &kswapd_order2_threshold,
+		.maxlen		= sizeof(kswapd_order2_threshold),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= SYSCTL_ZERO,
+	},
+	{
+		.procname	= "kswapd_order2_wakeup_threshold",
+		.data		= &kswapd_order2_wakeup_threshold,
+		.maxlen		= sizeof(kswapd_order2_wakeup_threshold),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= SYSCTL_ZERO,
 	},
 #ifdef CONFIG_NUMA
 	{
