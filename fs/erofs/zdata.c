@@ -7,7 +7,6 @@
 #include "compress.h"
 #include <linux/psi.h>
 #include <linux/cpuhotplug.h>
-#include <linux/mthp_alloc_counter.h>
 #include <trace/events/erofs.h>
 
 #define Z_EROFS_PCLUSTER_MAX_PAGES	(Z_EROFS_PCLUSTER_MAX_SIZE / PAGE_SIZE)

@@ -3976,7 +3976,7 @@ static vm_fault_t wp_page_copy_mthp(struct vm_fault *vmf,
 
 			old_ptes[i] = ptep_get(pte + i);
 			if (!wp_page_copy_mthp_pte_matches(vma, addr, old_ptes[i],
-								   old_folio, i, reason)) {
+								   old_folio, i)) {
 				same = false;
 				break;
 			}
@@ -5294,7 +5294,6 @@ static struct folio *alloc_anon_folio(struct vm_fault *vmf)
 	struct vm_area_struct *vma = vmf->vma;
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
 	unsigned long orders;
-	unsigned long suitable_orders;
 	struct folio *folio;
 	unsigned long addr;
 	pte_t *pte;
