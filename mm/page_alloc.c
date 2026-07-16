@@ -56,7 +56,6 @@
 #include <linux/khugepaged.h>
 #include <linux/delayacct.h>
 #include <linux/cacheinfo.h>
-#include <linux/mthp_alloc_counter.h>
 #include <linux/pgalloc_tag.h>
 #include <asm/div64.h>
 #include "internal.h"
@@ -3672,15 +3671,6 @@ static inline bool zone_watermark_fast_raw(struct zone *z, unsigned int order,
 		if (__zone_watermark_ok_raw(z, order, mark, highest_zoneidx,
 					alloc_flags, free_pages, direct_reclaim))
 			return true;
-	}
-
-	if (direct_reclaim) {
-		int reason = __this_cpu_read(last_alloc_stall_reason);
-
-		if (reason == ALLOC_STALL_REASON_WMARK)
-			mthp_count_alloc_fail_source(gfp_mask, true);
-		else if (reason == ALLOC_STALL_REASON_FRAGMENT)
-			mthp_count_alloc_fail_source(gfp_mask, false);
 	}
 
 	return false;

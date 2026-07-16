@@ -77,10 +77,8 @@
 #include <linux/vmalloc.h>
 #include <linux/sched/sysctl.h>
 #include <linux/moduleparam.h>
-#include <linux/mthp_alloc_counter.h>
 
 #include <trace/events/kmem.h>
-#include <trace/events/thp.h>
 
 #include <asm/io.h>
 #include <asm/mmu_context.h>
@@ -459,8 +457,6 @@ int __pte_alloc(struct mm_struct *mm, pmd_t *pmd)
 		return -ENOMEM;
 
 	pmd_install(mm, pmd, &new);
-	if (!new)
-		mthp_count_residual_order0(MTHP_RESIDUAL_ORDER0_PTE_ALLOC);
 	if (new)
 		pte_free(mm, new);
 	return 0;
@@ -479,8 +475,6 @@ int __pte_alloc_kernel(pmd_t *pmd)
 		new = NULL;
 	}
 	spin_unlock(&init_mm.page_table_lock);
-	if (!new)
-		mthp_count_residual_order0(MTHP_RESIDUAL_ORDER0_PTE_ALLOC);
 	if (new)
 		pte_free_kernel(&init_mm, new);
 	return 0;
@@ -1190,17 +1184,14 @@ copy_pte:
 }
 
 static inline struct folio *folio_prealloc(struct mm_struct *src_mm,
-		struct vm_area_struct *vma, unsigned long addr, bool need_zero,
-		enum mthp_vma_alloc_source source)
+		struct vm_area_struct *vma, unsigned long addr, bool need_zero)
 {
 	struct folio *new_folio;
 
 	if (need_zero)
-		new_folio = mthp_vma_alloc_zeroed_movable_folio_counted(vma,
-				addr, source);
+		new_folio = vma_alloc_zeroed_movable_folio(vma, addr);
 	else
-		new_folio = mthp_vma_alloc_folio_counted(GFP_HIGHUSER_MOVABLE,
-				0, vma, addr, source);
+		new_folio = vma_alloc_folio(GFP_HIGHUSER_MOVABLE, 0, vma, addr);
 
 	if (!new_folio)
 		return NULL;
@@ -1351,8 +1342,7 @@ again:
 	} else if (ret == -EBUSY || unlikely(ret == -EHWPOISON)) {
 		goto out;
 	} else if (ret ==  -EAGAIN) {
-		prealloc = folio_prealloc(src_mm, src_vma, addr, false,
-				MTHP_VMA_ALLOC_FORK_COPY);
+		prealloc = folio_prealloc(src_mm, src_vma, addr, false);
 		if (!prealloc)
 			return -ENOMEM;
 	} else if (ret < 0) {
@@ -3689,8 +3679,7 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 		goto out;
 
 	pfn_is_zero = is_zero_pfn(pte_pfn(vmf->orig_pte));
-	new_folio = folio_prealloc(mm, vma, vmf->address, pfn_is_zero,
-				    MTHP_VMA_ALLOC_COW);
+	new_folio = folio_prealloc(mm, vma, vmf->address, pfn_is_zero);
 	if (!new_folio)
 		goto oom;
 
@@ -3829,48 +3818,38 @@ core_param(mthp_cow_order2, mthp_cow_order2, bool, 0644);
 static bool wp_page_copy_mthp_pte_matches(struct vm_area_struct *vma,
 						  unsigned long addr, pte_t pte,
 						  struct folio *old_folio,
-						  unsigned int page_idx,
-						  enum mthp_cow_order2_fallback_reason *reason)
+						  unsigned int page_idx)
 {
 	struct page *page;
 
 	if (!pte_present(pte)) {
-		*reason = MTHP_COW_ORDER2_FALLBACK_PTE_CHANGED_OR_UNUSABLE;
 		return false;
 	}
 	if (pte_protnone(pte)) {
-		*reason = MTHP_COW_ORDER2_FALLBACK_PTE_CHANGED_OR_UNUSABLE;
 		return false;
 	}
 	if (pte_special(pte)) {
-		*reason = MTHP_COW_ORDER2_FALLBACK_PTE_CHANGED_OR_UNUSABLE;
 		return false;
 	}
 	if (pte_write(pte)) {
-		*reason = MTHP_COW_ORDER2_FALLBACK_PTE_CHANGED_OR_UNUSABLE;
 		return false;
 	}
 	if (pte_uffd_wp(pte)) {
-		*reason = MTHP_COW_ORDER2_FALLBACK_PTE_CHANGED_OR_UNUSABLE;
 		return false;
 	}
 
 	page = vm_normal_page(vma, addr, pte);
 	if (!page) {
-		*reason = MTHP_COW_ORDER2_FALLBACK_PTE_CHANGED_OR_UNUSABLE;
 		return false;
 	}
 	if (page_folio(page) != old_folio) {
-		*reason = MTHP_COW_ORDER2_FALLBACK_PTE_CHANGED_OR_UNUSABLE;
 		return false;
 	}
 	if (PageAnonExclusive(page)) {
-		*reason = MTHP_COW_ORDER2_FALLBACK_PTE_CHANGED_OR_UNUSABLE;
 		return false;
 	}
 
 	if (page != folio_page(old_folio, page_idx)) {
-		*reason = MTHP_COW_ORDER2_FALLBACK_PTE_CHANGED_OR_UNUSABLE;
 		return false;
 	}
 
@@ -3897,8 +3876,7 @@ static pte_t wp_page_copy_mthp_entry(struct vm_area_struct *vma,
 }
 
 static vm_fault_t wp_page_copy_mthp(struct vm_fault *vmf,
-					    struct folio *old_folio,
-					    enum mthp_cow_order2_fallback_reason *reason)
+					    struct folio *old_folio)
 {
 	const unsigned int order = WP_PAGE_COPY_MTHP_ORDER;
 	const unsigned int nr_pages = 1U << WP_PAGE_COPY_MTHP_ORDER;
@@ -3919,7 +3897,6 @@ static vm_fault_t wp_page_copy_mthp(struct vm_fault *vmf,
 	bool page_copied = false;
 	unsigned int i;
 
-	*reason = MTHP_COW_ORDER2_FALLBACK_OLD_FOLIO_NOT_ORDER2;
 	if (!mthp_cow_order2)
 		return VM_FAULT_FALLBACK;
 	if (!(vmf->flags & FAULT_FLAG_WRITE))
@@ -3933,15 +3910,12 @@ static vm_fault_t wp_page_copy_mthp(struct vm_fault *vmf,
 	if (folio_test_ksm(old_folio))
 		return VM_FAULT_FALLBACK;
 	if (folio_order(old_folio) != order || folio_nr_pages(old_folio) != nr_pages) {
-		*reason = MTHP_COW_ORDER2_FALLBACK_OLD_FOLIO_NOT_ORDER2;
 		return VM_FAULT_FALLBACK;
 	}
 	if (vmf->page != folio_page(old_folio, fault_idx)) {
-		*reason = MTHP_COW_ORDER2_FALLBACK_FAULT_PAGE_NOT_IN_OLD_FOLIO;
 		return VM_FAULT_FALLBACK;
 	}
 	if (userfaultfd_armed(vma)) {
-		*reason = MTHP_COW_ORDER2_FALLBACK_UFFD_ARMED;
 		return VM_FAULT_FALLBACK;
 	}
 	if (vma_soft_dirty_enabled(vma))
@@ -3952,9 +3926,7 @@ static vm_fault_t wp_page_copy_mthp(struct vm_fault *vmf,
 	    cow_end > vma->vm_end) {
 		orders = thp_vma_allowable_orders(vma, vma->vm_flags, TVA_PAGEFAULT,
 						  BIT(order));
-		if (orders & BIT(order))
-			count_vm_event(COW_MTHP_VMA_UNSUITABLE_ORDER2);
-		*reason = MTHP_COW_ORDER2_FALLBACK_VMA_BOUNDARY;
+
 		return VM_FAULT_FALLBACK;
 	}
 	if (pmd_addr_end(cow_addr, cow_end) != cow_end)
@@ -3963,12 +3935,8 @@ static vm_fault_t wp_page_copy_mthp(struct vm_fault *vmf,
 	orders = thp_vma_allowable_orders(vma, vma->vm_flags, TVA_PAGEFAULT,
 					  BIT(order));
 	suitable_orders = thp_vma_suitable_orders(vma, vmf->address, orders);
-	if ((orders & BIT(order)) && !(suitable_orders & BIT(order))) {
-		count_vm_event(COW_MTHP_VMA_UNSUITABLE_ORDER2);
-		*reason = MTHP_COW_ORDER2_FALLBACK_VMA_SUITABLE_FILTERED;
-	}
+	if ((orders & BIT(order)) && !(suitable_orders & BIT(order)))
 	if (!(orders & BIT(order)))
-		*reason = MTHP_COW_ORDER2_FALLBACK_VMA_NOT_ALLOWED;
 	orders = suitable_orders;
 	if (!(orders & BIT(order)))
 		return VM_FAULT_FALLBACK;
@@ -3980,20 +3948,16 @@ static vm_fault_t wp_page_copy_mthp(struct vm_fault *vmf,
 		goto out;
 
 	gfp = vma_thp_gfp_mask(vma);
-	new_folio = mthp_vma_alloc_folio_counted(gfp, order, vma, cow_addr,
-					       MTHP_VMA_ALLOC_COW);
+	new_folio = vma_alloc_folio(gfp, order, vma, cow_addr);
 	if (!new_folio) {
-		*reason = MTHP_COW_ORDER2_FALLBACK_ALLOC_FAIL;
 		goto fallback;
 	}
 	if (mem_cgroup_charge(new_folio, mm, gfp)) {
-		*reason = MTHP_COW_ORDER2_FALLBACK_MEMCG_FAIL;
 		goto fallback;
 	}
 	folio_throttle_swaprate(new_folio, gfp);
 
 	if (folio_mc_copy(new_folio, old_folio)) {
-		*reason = MTHP_COW_ORDER2_FALLBACK_COPY_FAIL;
 		goto fallback;
 	}
 	flush_dcache_folio(new_folio);
@@ -4018,7 +3982,6 @@ static vm_fault_t wp_page_copy_mthp(struct vm_fault *vmf,
 			}
 		}
 		if (same && !pte_same(old_ptes[fault_idx], vmf->orig_pte)) {
-			*reason = MTHP_COW_ORDER2_FALLBACK_PTE_CHANGED_OR_UNUSABLE;
 			same = false;
 		}
 
@@ -4049,7 +4012,6 @@ static vm_fault_t wp_page_copy_mthp(struct vm_fault *vmf,
 		}
 		pte_unmap_unlock(pte, vmf->ptl);
 	} else {
-		*reason = MTHP_COW_ORDER2_FALLBACK_PTE_CHANGED_OR_UNUSABLE;
 	}
 
 	mmu_notifier_invalidate_range_end(&range);
@@ -4064,7 +4026,6 @@ static vm_fault_t wp_page_copy_mthp(struct vm_fault *vmf,
 		folio_put_refs(old_folio, nr_pages);
 		free_swap_cache(old_folio);
 	}
-	count_vm_event(COW_MTHP_ORDER2);
 	ret = 0;
 out:
 	folio_put(old_folio);
@@ -4328,8 +4289,6 @@ static vm_fault_t do_wp_page(struct vm_fault *vmf)
 	vm_fault_t ret;
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
 	bool cow_mthp_fallback = false;
-	enum mthp_cow_order2_fallback_reason cow_mthp_fallback_reason =
-		MTHP_COW_ORDER2_FALLBACK_OLD_FOLIO_NOT_ORDER2;
 #endif
 
 	if (likely(!unshare)) {
@@ -4414,8 +4373,7 @@ static vm_fault_t do_wp_page(struct vm_fault *vmf)
 	pte_unmap_unlock(vmf->pte, vmf->ptl);
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
 	if (folio && folio_test_anon(folio)) {
-		vm_fault_t mthp_ret = wp_page_copy_mthp(vmf, folio,
-				&cow_mthp_fallback_reason);
+		vm_fault_t mthp_ret = wp_page_copy_mthp(vmf, folio);
 
 		if (!(mthp_ret & VM_FAULT_FALLBACK))
 			return mthp_ret;
@@ -4427,12 +4385,7 @@ static vm_fault_t do_wp_page(struct vm_fault *vmf)
 		count_vm_event(COW_KSM);
 #endif
 	ret = wp_page_copy(vmf);
-#ifdef CONFIG_TRANSPARENT_HUGEPAGE
-	if (cow_mthp_fallback && !ret) {
-		count_vm_event(COW_MTHP_FALLBACK_ORDER0);
-		mthp_count_cow_order2_fallback_reason(cow_mthp_fallback_reason);
-	}
-#endif
+
 	return ret;
 }
 
@@ -4706,8 +4659,7 @@ static struct folio *__alloc_swap_folio(struct vm_fault *vmf)
 	struct folio *folio;
 	swp_entry_t entry;
 
-	folio = mthp_vma_alloc_folio_counted(GFP_HIGHUSER_MOVABLE, 0, vma,
-					  vmf->address, MTHP_VMA_ALLOC_SWAPIN);
+	folio = vma_alloc_folio(GFP_HIGHUSER_MOVABLE, 0, vma, vmf->address);
 	if (!folio)
 		return NULL;
 
@@ -4843,8 +4795,7 @@ static struct folio *alloc_swap_folio(struct vm_fault *vmf)
 	gfp = vma_thp_gfp_mask(vma);
 	while (orders) {
 		addr = ALIGN_DOWN(vmf->address, PAGE_SIZE << order);
-		folio = mthp_vma_alloc_folio_counted(gfp, order, vma, addr,
-					       MTHP_VMA_ALLOC_SWAPIN);
+		folio = vma_alloc_folio(gfp, order, vma, addr);
 		if (folio) {
 			if (!mem_cgroup_swapin_charge_folio(folio, vma->vm_mm,
 							    gfp, entry))
@@ -5354,12 +5305,8 @@ static struct folio *alloc_anon_folio(struct vm_fault *vmf)
 	 * If uffd is active for the vma we need per-page fault fidelity to
 	 * maintain the uffd semantics.
 	 */
-	if (unlikely(userfaultfd_armed(vma))) {
-		mthp_count_anon_order2_fallback_reason(
-				MTHP_ANON_ORDER2_FALLBACK_UFFD_ARMED);
-		mthp_count_anon_order2_diag(vma, MTHP_ORDER2_DIAG_UFFD_BLOCKED);
+	if (unlikely(userfaultfd_armed(vma)))
 		goto fallback;
-	}
 
 	/*
 	 * Get a list of all the (large) orders below PMD_ORDER that are enabled
@@ -5368,31 +5315,7 @@ static struct folio *alloc_anon_folio(struct vm_fault *vmf)
 	 */
 	orders = thp_vma_allowable_orders(vma, vma->vm_flags, TVA_PAGEFAULT,
 					  BIT(PMD_ORDER) - 1);
-	suitable_orders = thp_vma_suitable_orders(vma, vmf->address, orders);
-	if ((orders & BIT(MTHP_ORDER2)) && !(suitable_orders & BIT(MTHP_ORDER2))) {
-		const char *anon_name = mthp_vma_anon_name(vma);
-
-		count_vm_event(ANON_MTHP_VMA_UNSUITABLE_ORDER2);
-		mthp_count_anon_order2_fallback_reason(
-				MTHP_ANON_ORDER2_FALLBACK_VMA_SUITABLE_FILTERED);
-		mthp_count_anon_order2_suitable_boundary(vma, vmf->address);
-		mthp_count_anon_order2_diag(vma, MTHP_ORDER2_DIAG_VMA_UNSUITABLE);
-		trace_mthp_anon_suitable_fallback(current->pid, current->tgid,
-				current->comm,
-				current->group_leader ? current->group_leader->comm : "",
-				vmf->address,
-				ALIGN_DOWN(vmf->address, PAGE_SIZE << MTHP_ORDER2),
-				vma->vm_start, vma->vm_end, vma->vm_flags,
-				mthp_vma_alloc_class(vma),
-				mthp_anon_order2_suitable_subreason(vma, vmf->address),
-				anon_name ? anon_name : "");
-	}
-	if (!(orders & BIT(MTHP_ORDER2))) {
-		mthp_count_anon_order2_fallback_reason(
-				MTHP_ANON_ORDER2_FALLBACK_VMA_NOT_ALLOWED);
-		mthp_count_anon_order2_not_allowed_class(vma);
-	}
-	orders = suitable_orders;
+	orders = thp_vma_suitable_orders(vma, vmf->address, orders);
 
 	if (!orders)
 		goto fallback;
@@ -5411,11 +5334,6 @@ static struct folio *alloc_anon_folio(struct vm_fault *vmf)
 		addr = ALIGN_DOWN(vmf->address, PAGE_SIZE << order);
 		if (pte_range_none(pte + pte_index(addr), 1 << order))
 			break;
-		if (order == MTHP_ORDER2) {
-			mthp_count_anon_order2_fallback_reason(
-					MTHP_ANON_ORDER2_FALLBACK_PTE_RANGE_NOT_EMPTY);
-			mthp_count_anon_order2_diag(vma, MTHP_ORDER2_DIAG_PTE_OCCUPIED);
-		}
 		order = next_order(&orders, order);
 	}
 
@@ -5428,17 +5346,11 @@ static struct folio *alloc_anon_folio(struct vm_fault *vmf)
 	gfp = vma_thp_gfp_mask(vma);
 	while (orders) {
 		addr = ALIGN_DOWN(vmf->address, PAGE_SIZE << order);
-		folio = mthp_vma_alloc_folio_counted(gfp, order, vma, addr,
-					       MTHP_VMA_ALLOC_ANON_FAULT);
+		folio = vma_alloc_folio(gfp, order, vma, addr);
 		if (folio) {
 			if (mem_cgroup_charge(folio, vma->vm_mm, gfp)) {
 				count_mthp_stat(order, MTHP_STAT_ANON_FAULT_FALLBACK_CHARGE);
-				if (order == MTHP_ORDER2) {
-					mthp_count_anon_order2_fallback_reason(
-							MTHP_ANON_ORDER2_FALLBACK_MEMCG_FAIL);
-					mthp_count_anon_order2_diag(vma,
-							MTHP_ORDER2_DIAG_MEMCG_FAIL);
-				}
+
 				folio_put(folio);
 				goto next;
 			}
@@ -5454,11 +5366,7 @@ static struct folio *alloc_anon_folio(struct vm_fault *vmf)
 				folio_zero_user(folio, vmf->address);
 			return folio;
 		}
-		if (order == MTHP_ORDER2) {
-			mthp_count_anon_order2_fallback_reason(
-					MTHP_ANON_ORDER2_FALLBACK_ALLOC_FAIL);
-			mthp_count_anon_order2_diag(vma, MTHP_ORDER2_DIAG_ALLOC_FAIL);
-		}
+
 next:
 		count_mthp_stat(order, MTHP_STAT_ANON_FAULT_FALLBACK);
 		order = next_order(&orders, order);
@@ -5466,8 +5374,7 @@ next:
 
 fallback:
 #endif
-	return folio_prealloc(vma->vm_mm, vma, vmf->address, true,
-			       MTHP_VMA_ALLOC_ANON_FAULT);
+	return folio_prealloc(vma->vm_mm, vma, vmf->address, true);
 }
 
 /*
@@ -6081,8 +5988,7 @@ static vm_fault_t do_cow_fault(struct vm_fault *vmf)
 	if (ret)
 		return ret;
 
-	folio = folio_prealloc(vma->vm_mm, vma, vmf->address, false,
-			       MTHP_VMA_ALLOC_FILE_COW);
+	folio = folio_prealloc(vma->vm_mm, vma, vmf->address, false);
 	if (!folio)
 		return VM_FAULT_OOM;
 
@@ -6942,7 +6848,6 @@ int __pmd_alloc(struct mm_struct *mm, pud_t *pud, unsigned long address)
 		mm_inc_nr_pmds(mm);
 		smp_wmb(); /* See comment in pmd_install() */
 		pud_populate(mm, pud, new);
-		mthp_count_residual_order0(MTHP_RESIDUAL_ORDER0_PMD_ALLOC);
 	} else {	/* Another has populated it */
 		pmd_free(mm, new);
 	}

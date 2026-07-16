@@ -51,7 +51,6 @@
 #include <linux/dax.h>
 #include <linux/psi.h>
 #include <linux/pagewalk.h>
-#include <linux/mthp_alloc_counter.h>
 #include <linux/shmem_fs.h>
 #include <linux/ctype.h>
 #include <linux/debugfs.h>
@@ -6416,13 +6415,10 @@ retry:
 
 		trace_direct_reclaim(sc->order, sc->gfp_mask);
 		__count_zid_vm_events(ALLOCSTALL, sc->reclaim_idx, 1);
-		if (reason == ALLOC_STALL_REASON_WMARK) {
+		if (reason == ALLOC_STALL_REASON_WMARK)
 			count_vm_event(ALLOC_STALL_WMARK);
-			mthp_count_alloc_stall_source(sc->gfp_mask, true);
-		} else if (reason == ALLOC_STALL_REASON_FRAGMENT) {
+		else if (reason == ALLOC_STALL_REASON_FRAGMENT)
 			count_vm_event(ALLOC_STALL_FRAGMENT);
-			mthp_count_alloc_stall_source(sc->gfp_mask, false);
-		}
 	}
 
 	do {

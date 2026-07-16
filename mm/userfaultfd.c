@@ -17,7 +17,6 @@
 #include <linux/userfaultfd_k.h>
 #include <linux/mmu_notifier.h>
 #include <linux/hugetlb.h>
-#include <linux/mthp_alloc_counter.h>
 #include <linux/shmem_fs.h>
 #include <asm/tlbflush.h>
 #include <asm/tlb.h>
@@ -327,15 +326,8 @@ static ssize_t mfill_atomic_pte_order2(pmd_t *dst_pmd,
 					       flags))
 		return 0;
 
-	if (is_copy)
-		count_vm_event(UFFD_MFILL_ORDER2_ATTEMPT_COPY);
-	else
-		count_vm_event(UFFD_MFILL_ORDER2_ATTEMPT_ZEROPAGE);
-
-	folio = mthp_vma_alloc_folio_counted(GFP_HIGHUSER_MOVABLE,
-			       UFFD_MFILL_ORDER2_ORDER, dst_vma, dst_addr,
-			       is_copy ? MTHP_VMA_ALLOC_UFFD_COPY :
-			       MTHP_VMA_ALLOC_UFFD_ZEROPAGE);
+	folio = vma_alloc_folio(GFP_HIGHUSER_MOVABLE,
+			       UFFD_MFILL_ORDER2_ORDER, dst_vma, dst_addr);
 	if (!folio) {
 		return 0;
 	}
@@ -387,10 +379,7 @@ static ssize_t mfill_atomic_pte_order2(pmd_t *dst_pmd,
 	update_mmu_cache_range(NULL, dst_vma, dst_addr, dst_pte,
 			       UFFD_MFILL_ORDER2_NR);
 
-	if (is_copy)
-		count_vm_event(UFFD_MFILL_ORDER2_SUCCESS_COPY);
-	else
-		count_vm_event(UFFD_MFILL_ORDER2_SUCCESS_ZEROPAGE);
+
 	ret = UFFD_MFILL_ORDER2_SIZE;
 out_unlock:
 	pte_unmap_unlock(dst_pte, ptl);
@@ -412,9 +401,8 @@ static int mfill_atomic_pte_copy(pmd_t *dst_pmd,
 
 	if (!*foliop) {
 		ret = -ENOMEM;
-		folio = mthp_vma_alloc_folio_counted(GFP_HIGHUSER_MOVABLE, 0,
-					dst_vma, dst_addr,
-					MTHP_VMA_ALLOC_UFFD_COPY);
+		folio = vma_alloc_folio(GFP_HIGHUSER_MOVABLE, 0, dst_vma,
+					dst_addr);
 		if (!folio)
 			goto out;
 
@@ -469,7 +457,6 @@ static int mfill_atomic_pte_copy(pmd_t *dst_pmd,
 				       &folio->page, true, flags);
 	if (ret)
 		goto out_release;
-	count_vm_event(UFFD_MFILL_ORDER0_SUCCESS_COPY);
 out:
 	return ret;
 out_release:
@@ -484,8 +471,7 @@ static int mfill_atomic_pte_zeroed_folio(pmd_t *dst_pmd,
 	struct folio *folio;
 	int ret = -ENOMEM;
 
-	folio = mthp_vma_alloc_zeroed_movable_folio_counted(dst_vma, dst_addr,
-					MTHP_VMA_ALLOC_UFFD_ZEROPAGE);
+	folio = vma_alloc_zeroed_movable_folio(dst_vma, dst_addr);
 	if (!folio)
 		return ret;
 
@@ -503,7 +489,6 @@ static int mfill_atomic_pte_zeroed_folio(pmd_t *dst_pmd,
 				       &folio->page, true, 0);
 	if (ret)
 		goto out_put;
-	count_vm_event(UFFD_MFILL_ORDER0_SUCCESS_ZEROPAGE);
 
 	return 0;
 out_put:
