@@ -467,12 +467,20 @@ void drop_slab(void)
 	} while ((freed >> shift++) > 1);
 }
 
+#define NR_VM_RECLAIMER_TYPES 4
+
 #define CHECK_RECLAIMER_OFFSET(type)					\
 	do {								\
 		BUILD_BUG_ON(PGSTEAL_##type - PGSTEAL_KSWAPD !=		\
 			     PGDEMOTE_##type - PGDEMOTE_KSWAPD);	\
 		BUILD_BUG_ON(PGSTEAL_##type - PGSTEAL_KSWAPD !=		\
 			     PGSCAN_##type - PGSCAN_KSWAPD);		\
+		BUILD_BUG_ON(PGSTEAL_ORDER_##type -			\
+			     PGSTEAL_ORDER_KSWAPD !=			\
+			     PGSTEAL_##type - PGSTEAL_KSWAPD);		\
+		BUILD_BUG_ON(PGSTEAL_ORDER2_##type -			\
+			     PGSTEAL_ORDER2_KSWAPD !=			\
+			     PGSTEAL_##type - PGSTEAL_KSWAPD);		\
 	} while (0)
 
 static int reclaimer_offset(struct scan_control *sc)
@@ -1548,6 +1556,7 @@ retry:
 					 * leave it off the LRU).
 					 */
 					nr_reclaimed += nr_pages;
+					stat->nr_reclaimed_ordbkt[folio_order(folio) >> 1] += nr_pages;
 					continue;
 				}
 			}
@@ -1578,6 +1587,7 @@ free_it:
 		 * all pages in it.
 		 */
 		nr_reclaimed += nr_pages;
+		stat->nr_reclaimed_ordbkt[folio_order(folio) >> 1] += nr_pages;
 
 		folio_unqueue_deferred_split(folio);
 		if (folio_batch_add(&free_folios, folio) == 0) {
@@ -2079,6 +2089,17 @@ static unsigned long shrink_inactive_list(unsigned long nr_to_scan,
 		__count_vm_events(item, nr_reclaimed);
 	count_memcg_events(lruvec_memcg(lruvec), item, nr_reclaimed);
 	__count_vm_events(PGSTEAL_ANON + file, nr_reclaimed);
+	{
+		int r_off = reclaimer_offset(sc);
+
+		for (int ob = 0; ob < ARRAY_SIZE(stat.nr_reclaimed_ordbkt); ob++) {
+			if (stat.nr_reclaimed_ordbkt[ob])
+				__count_vm_events(
+					PGSTEAL_ORDER_KSWAPD +
+					ob * NR_VM_RECLAIMER_TYPES + r_off,
+					stat.nr_reclaimed_ordbkt[ob]);
+		}
+	}
 
 	lru_note_cost_unlock_irq(lruvec, file, stat.nr_pageout,
 					nr_scanned - nr_reclaimed);
@@ -4808,6 +4829,17 @@ retry:
 		__count_vm_events(item, reclaimed);
 	count_memcg_events(memcg, item, reclaimed);
 	__count_vm_events(PGSTEAL_ANON + type, reclaimed);
+	{
+		int r_off = reclaimer_offset(sc);
+
+		for (int ob = 0; ob < ARRAY_SIZE(stat.nr_reclaimed_ordbkt); ob++) {
+			if (stat.nr_reclaimed_ordbkt[ob])
+				__count_vm_events(
+					PGSTEAL_ORDER_KSWAPD +
+					ob * NR_VM_RECLAIMER_TYPES + r_off,
+					stat.nr_reclaimed_ordbkt[ob]);
+		}
+	}
 
 	spin_unlock_irq(&lruvec->lru_lock);
 
@@ -7068,6 +7100,43 @@ static int balance_pgdat(pg_data_t *pgdat, int order, int highest_zoneidx)
 	__fs_reclaim_acquire(_THIS_IP_);
 
 	count_vm_event(PAGEOUTRUN);
+	{
+		unsigned long order2_free = 0;
+		int z;
+		for (z = 0; z <= highest_zoneidx; z++) {
+			struct zone *z2 = &pgdat->node_zones[z];
+			if (managed_zone(z2))
+				order2_free += z2->free_area[2].nr_free;
+		}
+		if (order2_free == 0)
+			count_vm_event(PGOUTRUN_ORDER2_B0);
+		else if (order2_free == 1)
+			count_vm_event(PGOUTRUN_ORDER2_B1);
+		else if (order2_free <= 3)
+			count_vm_event(PGOUTRUN_ORDER2_B2_3);
+		else if (order2_free <= 7)
+			count_vm_event(PGOUTRUN_ORDER2_B4_7);
+		else if (order2_free <= 15)
+			count_vm_event(PGOUTRUN_ORDER2_B8_15);
+		else if (order2_free <= 31)
+			count_vm_event(PGOUTRUN_ORDER2_B16_31);
+		else if (order2_free <= 63)
+			count_vm_event(PGOUTRUN_ORDER2_B32_63);
+		else if (order2_free <= 127)
+			count_vm_event(PGOUTRUN_ORDER2_B64_127);
+		else if (order2_free <= 255)
+			count_vm_event(PGOUTRUN_ORDER2_B128_255);
+		else if (order2_free <= 511)
+			count_vm_event(PGOUTRUN_ORDER2_B256_511);
+		else if (order2_free <= 1023)
+			count_vm_event(PGOUTRUN_ORDER2_B512_1023);
+		else if (order2_free <= 2047)
+			count_vm_event(PGOUTRUN_ORDER2_B1024_2047);
+		else if (order2_free <= 4095)
+			count_vm_event(PGOUTRUN_ORDER2_B2048_4095);
+		else
+			count_vm_event(PGOUTRUN_ORDER2_B4096_INF);
+	}
 
 	/*
 	 * Account for the reclaim boost. Note that the zone boost is left in
@@ -7221,6 +7290,16 @@ restart:
 		sc.no_cache_trim_mode = 1;
 		goto restart;
 	}
+
+	/*
+	 * If the order-2 threshold is active and not yet met, restart the
+	 * priority loop to keep reclaiming. This ensures kswapd does not
+	 * give up after one priority sweep when the system still needs
+	 * more order-2 free blocks.
+	 */
+	if (sc.order == 2 && kswapd_order2_threshold &&
+	    !pgdat_balanced(pgdat, 2, highest_zoneidx))
+		goto restart;
 
 	if (!sc.nr_reclaimed)
 		atomic_inc(&pgdat->kswapd_failures);

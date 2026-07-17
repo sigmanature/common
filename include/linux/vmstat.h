@@ -26,6 +26,7 @@ struct reclaim_stat {
 	unsigned nr_unmap_fail;
 	unsigned nr_lazyfree_fail;
 	unsigned nr_demoted;
+	unsigned int nr_reclaimed_ordbkt[2];   /* [0]: order0/1, [1]: order2+ */
 };
 
 /* Stat data for system wide items */
