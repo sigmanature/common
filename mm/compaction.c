@@ -1890,8 +1890,8 @@ static int sysctl_compact_unevictable_allowed __read_mostly = CONFIG_COMPACT_UNE
 static unsigned int __read_mostly sysctl_compaction_proactiveness = 20;
 static int sysctl_extfrag_threshold = 500;
 static int __read_mostly sysctl_compact_memory;
-unsigned long sysctl_compact_order2_threshold __read_mostly = 0;
-unsigned long sysctl_compact_order2_alloc_wake __read_mostly = 0;
+unsigned long sysctl_compact_order2_threshold __read_mostly = 2048;
+unsigned long sysctl_compact_order2_alloc_wake __read_mostly = 2048;
 
 unsigned long kcompactd_wake_reasons_bitmap;
 
@@ -2838,6 +2838,9 @@ enum compact_result try_to_compact_pages(gfp_t gfp_mask, unsigned int order,
 			!__cpuset_zone_allowed(zone, gfp_mask))
 				continue;
 
+		if (zone_idx(zone) == ZONE_NORMAL)
+			continue;
+
 		if (prio > MIN_COMPACT_PRIORITY
 					&& compaction_deferred(zone, order)) {
 			rc = max_t(enum compact_result, COMPACT_DEFERRED, rc);
@@ -2914,6 +2917,9 @@ static int compact_node(pg_data_t *pgdat, bool proactive)
 
 		if (fatal_signal_pending(current))
 			return -EINTR;
+
+		if (zone_idx(zone) == ZONE_NORMAL)
+			continue;
 
 		cc.zone = zone;
 
@@ -3043,6 +3049,9 @@ static bool kcompactd_node_suitable(pg_data_t *pgdat)
 		zone = &pgdat->node_zones[zoneid];
 
 		if (!populated_zone(zone))
+			continue;
+
+		if (zone_idx(zone) == ZONE_NORMAL)
 			continue;
 
 		ret = compaction_suit_allocation_order(zone,

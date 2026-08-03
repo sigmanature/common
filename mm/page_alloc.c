@@ -946,6 +946,14 @@ buddy_merge_likely(unsigned long pfn, unsigned long buddy_pfn,
  * -- nyc
  */
 
+static inline unsigned int zone_max_order(struct zone *zone)
+{
+	if (zone_idx(zone) == ZONE_NORMAL)
+		return 2;
+
+	return MAX_PAGE_ORDER;
+}
+
 static inline void __free_one_page(struct page *page,
 		unsigned long pfn,
 		struct zone *zone, unsigned int order,
@@ -966,7 +974,7 @@ static inline void __free_one_page(struct page *page,
 
 	account_freepages(zone, 1 << order, migratetype);
 
-	while (order < MAX_PAGE_ORDER) {
+	while (order < zone_max_order(zone)) {
 		int buddy_mt = migratetype;
 
 		if (compaction_capture(capc, page, order, migratetype)) {
@@ -3821,6 +3829,11 @@ retry:
 		struct page *page;
 		unsigned long mark;
 
+		if ((gfp_mask & __GFP_MOVABLE) &&
+		    ((order == 0 && zone_idx(zone) != ZONE_DMA32) ||
+		     (order >= 2 && zone_idx(zone) != ZONE_NORMAL)))
+			continue;
+
 		if (cpusets_enabled() &&
 			(alloc_flags & ALLOC_CPUSET) &&
 			!__cpuset_zone_allowed(zone, gfp_mask))
@@ -5060,7 +5073,7 @@ static inline bool prepare_alloc_pages(gfp_t gfp_mask, unsigned int order,
 		struct alloc_context *ac, gfp_t *alloc_gfp,
 		unsigned int *alloc_flags)
 {
-	ac->highest_zoneidx = gfp_zone(gfp_mask);
+	ac->highest_zoneidx = gfp_order_zone(gfp_mask, order);
 	ac->zonelist = node_zonelist(preferred_nid, gfp_mask);
 	ac->nodemask = nodemask;
 	ac->migratetype = gfp_migratetype(gfp_mask);
