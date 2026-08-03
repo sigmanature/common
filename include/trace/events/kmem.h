@@ -469,6 +469,46 @@ TRACE_EVENT(rss_stat,
 		__print_symbolic(__entry->member, TRACE_MM_PAGES),
 		__entry->size)
 	);
+
+TRACE_EVENT(mm_alloc_contig_range,
+
+	TP_PROTO(u64 start_ns, u64 end_ns, unsigned long start_pfn,
+		 unsigned long end_pfn, unsigned int alloc_flags, gfp_t gfp_mask,
+		 int nid, int zid, int ret),
+
+	TP_ARGS(start_ns, end_ns, start_pfn, end_pfn, alloc_flags, gfp_mask,
+		nid, zid, ret),
+
+	TP_STRUCT__entry(
+		__field(u64, start_ns)
+		__field(u64, end_ns)
+		__field(unsigned long, start_pfn)
+		__field(unsigned long, end_pfn)
+		__field(unsigned int, alloc_flags)
+		__field(unsigned long, gfp_mask)
+		__field(int, nid)
+		__field(int, zid)
+		__field(int, ret)
+	),
+
+	TP_fast_assign(
+		__entry->start_ns = start_ns;
+		__entry->end_ns = end_ns;
+		__entry->start_pfn = start_pfn;
+		__entry->end_pfn = end_pfn;
+		__entry->alloc_flags = alloc_flags;
+		__entry->gfp_mask = (__force unsigned long)gfp_mask;
+		__entry->nid = nid;
+		__entry->zid = zid;
+		__entry->ret = ret;
+	),
+
+	TP_printk("start_ns=%llu end_ns=%llu start_pfn=%lu end_pfn=%lu alloc_flags=%#x gfp_mask=%s nid=%d zid=%d ret=%d",
+		__entry->start_ns, __entry->end_ns, __entry->start_pfn,
+		__entry->end_pfn, __entry->alloc_flags,
+		show_gfp_flags(__entry->gfp_mask), __entry->nid, __entry->zid,
+		__entry->ret)
+);
 #endif /* _TRACE_KMEM_H */
 
 /* This part must be outside protection */
