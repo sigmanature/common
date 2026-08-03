@@ -59,6 +59,9 @@
 #include <linux/random.h>
 #include <linux/mmu_notifier.h>
 #include <linux/parser.h>
+#include <linux/ktime.h>
+#include <linux/proc_fs.h>
+#include <linux/seq_file.h>
 
 #include <asm/tlbflush.h>
 #include <asm/div64.h>
@@ -213,6 +216,375 @@ struct scan_control {
 int vm_swappiness = 60;
 int kswapd_order2_threshold;
 int kswapd_order2_wakeup_threshold;
+
+enum order2_kswapd_wake_state {
+	ORDER2_KSWAPD_ACTIVE,
+	ORDER2_KSWAPD_TRY_SLEEP,
+	ORDER2_KSWAPD_WAKE_RECORDING,
+	ORDER2_KSWAPD_WAKE_RECORDED,
+};
+
+struct order2_kswapd_wake_sample {
+	atomic_t state;
+	u64 try_sleep_epoch;
+	u64 first_wake_ns;
+	u64 first_wake_epoch;
+	u64 pending_trace_seq;
+	unsigned long first_wake_free;
+	int first_wake_zidx;
+	int pending_trace_zidx;
+};
+
+static struct order2_kswapd_wake_sample order2_kswapd_wake[MAX_NUMNODES];
+static atomic64_t order2_kswapd_wake_epoch = ATOMIC64_INIT(0);
+static atomic64_t order2_kswapd_trace_seq = ATOMIC64_INIT(0);
+
+#define DIRECT_RECLAIM_RING_SIZE	131072
+
+struct direct_reclaim_sample {
+	u64 write_seq;
+	u64 seq;
+	u64 begin_ns;
+	u64 end_ns;
+	u64 dur_us;
+	unsigned long nr_reclaimed;
+	gfp_t gfp_mask;
+	int order;
+	int reclaim_idx;
+	int reason;
+	bool committed;
+};
+
+static atomic64_t direct_reclaim_seq = ATOMIC64_INIT(0);
+static struct direct_reclaim_sample
+	direct_reclaim_ring[DIRECT_RECLAIM_RING_SIZE];
+
+struct direct_reclaim_handle {
+	u64 seq;
+	int idx;
+};
+
+struct order2_kswapd_trace_context {
+	bool active;
+	bool emitted;
+};
+
+static struct direct_reclaim_handle
+direct_reclaim_record_begin(int order, gfp_t gfp_mask, int reclaim_idx,
+			    int reason)
+{
+	struct direct_reclaim_sample *sample;
+	struct direct_reclaim_handle handle;
+	u64 seq, write_seq;
+	int idx;
+
+	seq = atomic64_inc_return(&direct_reclaim_seq);
+	idx = (seq - 1) & (DIRECT_RECLAIM_RING_SIZE - 1);
+	handle.seq = seq;
+	handle.idx = idx;
+	write_seq = seq << 1;
+	sample = &direct_reclaim_ring[idx];
+	WRITE_ONCE(sample->write_seq, write_seq | 1);
+	smp_wmb();
+	WRITE_ONCE(sample->committed, false);
+	WRITE_ONCE(sample->seq, seq);
+	WRITE_ONCE(sample->begin_ns, ktime_get_mono_fast_ns());
+	WRITE_ONCE(sample->end_ns, 0);
+	WRITE_ONCE(sample->dur_us, 0);
+	WRITE_ONCE(sample->nr_reclaimed, 0);
+	WRITE_ONCE(sample->gfp_mask, gfp_mask);
+	WRITE_ONCE(sample->order, order);
+	WRITE_ONCE(sample->reclaim_idx, reclaim_idx);
+	WRITE_ONCE(sample->reason, reason);
+	smp_wmb();
+	WRITE_ONCE(sample->write_seq, write_seq);
+
+	return handle;
+}
+
+static void direct_reclaim_record_end(struct direct_reclaim_handle handle,
+				      unsigned long nr_reclaimed)
+{
+	struct direct_reclaim_sample *sample;
+	u64 begin_ns, end_ns;
+
+	if (handle.idx < 0)
+		return;
+
+	sample = &direct_reclaim_ring[handle.idx];
+	if (READ_ONCE(sample->write_seq) == (handle.seq << 1) &&
+	    READ_ONCE(sample->seq) == handle.seq) {
+		begin_ns = READ_ONCE(sample->begin_ns);
+		end_ns = ktime_get_mono_fast_ns();
+		WRITE_ONCE(sample->end_ns, end_ns);
+		WRITE_ONCE(sample->dur_us, end_ns >= begin_ns ?
+			div_u64(end_ns - begin_ns, NSEC_PER_USEC) : 0);
+		WRITE_ONCE(sample->nr_reclaimed, nr_reclaimed);
+		smp_store_release(&sample->committed, true);
+	}
+}
+
+static bool direct_reclaim_read(u64 seq, struct direct_reclaim_sample *out)
+{
+	struct direct_reclaim_sample *sample;
+	u64 write_seq, write_seq_end;
+	int idx;
+
+	idx = (seq - 1) & (DIRECT_RECLAIM_RING_SIZE - 1);
+	sample = &direct_reclaim_ring[idx];
+	write_seq = READ_ONCE(sample->write_seq);
+	if (!write_seq || (write_seq & 1))
+		return false;
+
+	smp_rmb();
+	out->seq = READ_ONCE(sample->seq);
+	out->begin_ns = READ_ONCE(sample->begin_ns);
+	out->end_ns = READ_ONCE(sample->end_ns);
+	out->dur_us = READ_ONCE(sample->dur_us);
+	out->nr_reclaimed = READ_ONCE(sample->nr_reclaimed);
+	out->gfp_mask = READ_ONCE(sample->gfp_mask);
+	out->order = READ_ONCE(sample->order);
+	out->reclaim_idx = READ_ONCE(sample->reclaim_idx);
+	out->reason = READ_ONCE(sample->reason);
+	out->committed = smp_load_acquire(&sample->committed);
+	smp_rmb();
+	write_seq_end = READ_ONCE(sample->write_seq);
+
+	return write_seq == write_seq_end && out->seq == seq &&
+	       write_seq == (seq << 1);
+}
+
+static int direct_reclaim_samples_show(struct seq_file *m, void *v)
+{
+	struct direct_reclaim_sample sample;
+	u64 seq, start_seq, end_seq;
+
+	BUILD_BUG_ON(!is_power_of_2(DIRECT_RECLAIM_RING_SIZE));
+
+	end_seq = atomic64_read(&direct_reclaim_seq);
+	start_seq = end_seq > DIRECT_RECLAIM_RING_SIZE ?
+		end_seq - DIRECT_RECLAIM_RING_SIZE + 1 : 1;
+
+	seq_puts(m, "seq\tbegin_ns\tend_ns\tdur_us\torder\tgfp_mask\treclaim_idx\treason\tnr_reclaimed\tcommitted\n");
+	for (seq = start_seq; seq <= end_seq; seq++) {
+		if (!direct_reclaim_read(seq, &sample))
+			continue;
+
+		seq_printf(m, "%llu\t%llu\t%llu\t%llu\t%d\t0x%x\t%d\t%d\t%lu\t%u\n",
+			   sample.seq, sample.begin_ns, sample.end_ns,
+			   sample.dur_us, sample.order, sample.gfp_mask,
+			   sample.reclaim_idx, sample.reason,
+			   sample.nr_reclaimed, sample.committed ? 1 : 0);
+	}
+
+	return 0;
+}
+
+static int __init direct_reclaim_samples_init(void)
+{
+	proc_create_single("direct_reclaim_samples", 0444, NULL,
+			   direct_reclaim_samples_show);
+	return 0;
+}
+late_initcall(direct_reclaim_samples_init);
+
+static void count_order2_free_bucket(enum vm_event_item base,
+					    unsigned long free)
+{
+	enum vm_event_item item;
+
+	BUILD_BUG_ON(PGOUTRUN_ORDER2_B4096_INF - PGOUTRUN_ORDER2_B0 != 13);
+	BUILD_BUG_ON(PGWAKE_ORDER2_FIRST_B4096_INF - PGWAKE_ORDER2_FIRST_B0 != 13);
+
+	if (free == 0)
+		item = base;
+	else if (free == 1)
+		item = base + 1;
+	else if (free <= 3)
+		item = base + 2;
+	else if (free <= 7)
+		item = base + 3;
+	else if (free <= 15)
+		item = base + 4;
+	else if (free <= 31)
+		item = base + 5;
+	else if (free <= 63)
+		item = base + 6;
+	else if (free <= 127)
+		item = base + 7;
+	else if (free <= 255)
+		item = base + 8;
+	else if (free <= 511)
+		item = base + 9;
+	else if (free <= 1023)
+		item = base + 10;
+	else if (free <= 2047)
+		item = base + 11;
+	else if (free <= 4095)
+		item = base + 12;
+	else
+		item = base + 13;
+
+	count_vm_event(item);
+}
+
+static void count_order2_wake_to_pgoutrun_us(u64 delta_ns)
+{
+	u64 delta_us = div_u64(delta_ns, NSEC_PER_USEC);
+
+	if (delta_us <= 99)
+		count_vm_event(PGWAKE_TO_PGOUTRUN_US_B0_99);
+	else if (delta_us <= 499)
+		count_vm_event(PGWAKE_TO_PGOUTRUN_US_B100_499);
+	else if (delta_us <= 999)
+		count_vm_event(PGWAKE_TO_PGOUTRUN_US_B500_999);
+	else if (delta_us <= 4999)
+		count_vm_event(PGWAKE_TO_PGOUTRUN_US_B1000_4999);
+	else if (delta_us <= 9999)
+		count_vm_event(PGWAKE_TO_PGOUTRUN_US_B5000_9999);
+	else if (delta_us <= 49999)
+		count_vm_event(PGWAKE_TO_PGOUTRUN_US_B10000_49999);
+	else
+		count_vm_event(PGWAKE_TO_PGOUTRUN_US_B50000_INF);
+}
+
+static void count_order2_wake_to_pgoutrun_delta(long delta)
+{
+	if (delta <= -4096)
+		count_vm_event(PGWAKE_TO_PGOUTRUN_DELTA_NEG4096_INF);
+	else if (delta <= -2048)
+		count_vm_event(PGWAKE_TO_PGOUTRUN_DELTA_NEG2048_4095);
+	else if (delta <= -1024)
+		count_vm_event(PGWAKE_TO_PGOUTRUN_DELTA_NEG1024_2047);
+	else if (delta < 0)
+		count_vm_event(PGWAKE_TO_PGOUTRUN_DELTA_NEG1_1023);
+	else if (delta == 0)
+		count_vm_event(PGWAKE_TO_PGOUTRUN_DELTA_ZERO);
+	else if (delta <= 1023)
+		count_vm_event(PGWAKE_TO_PGOUTRUN_DELTA_POS1_1023);
+	else if (delta <= 2047)
+		count_vm_event(PGWAKE_TO_PGOUTRUN_DELTA_POS1024_2047);
+	else if (delta <= 4095)
+		count_vm_event(PGWAKE_TO_PGOUTRUN_DELTA_POS2048_4095);
+	else
+		count_vm_event(PGWAKE_TO_PGOUTRUN_DELTA_POS4096_INF);
+}
+
+static void count_kswapd_order2_iters(unsigned int iters)
+{
+	if (iters <= 1)
+		count_vm_event(KSWAPD_ORDER2_ITERS_B1);
+	else if (iters <= 3)
+		count_vm_event(KSWAPD_ORDER2_ITERS_B2_3);
+	else if (iters <= 7)
+		count_vm_event(KSWAPD_ORDER2_ITERS_B4_7);
+	else if (iters <= 15)
+		count_vm_event(KSWAPD_ORDER2_ITERS_B8_15);
+	else
+		count_vm_event(KSWAPD_ORDER2_ITERS_B16_INF);
+}
+
+bool order2_kswapd_record_first_wake(struct zone *zone,
+					     unsigned long free_order2,
+					     unsigned long threshold,
+					     unsigned int alloc_order,
+					     gfp_t gfp_mask,
+					     unsigned int alloc_flags,
+					     u64 *wake_epoch)
+{
+	struct order2_kswapd_wake_sample *sample;
+	pg_data_t *pgdat = zone->zone_pgdat;
+	u64 epoch, first_wake_ns;
+
+	sample = &order2_kswapd_wake[pgdat->node_id];
+	if (atomic_read(&sample->state) != ORDER2_KSWAPD_TRY_SLEEP)
+		return false;
+
+	if (atomic_cmpxchg_acquire(&sample->state, ORDER2_KSWAPD_TRY_SLEEP,
+				    ORDER2_KSWAPD_WAKE_RECORDING) !=
+	    ORDER2_KSWAPD_TRY_SLEEP)
+		return false;
+
+	first_wake_ns = ktime_get_mono_fast_ns();
+	epoch = READ_ONCE(sample->try_sleep_epoch);
+	sample->first_wake_ns = first_wake_ns;
+	sample->first_wake_epoch = epoch;
+	sample->first_wake_free = free_order2;
+	sample->first_wake_zidx = zone_idx(zone);
+	smp_wmb();
+	atomic_set(&sample->state, ORDER2_KSWAPD_WAKE_RECORDED);
+
+	if (wake_epoch)
+		*wake_epoch = epoch;
+
+	trace_mm_order2_kswapd_first_wake(epoch, pgdat->node_id, zone_idx(zone),
+					     first_wake_ns, free_order2, threshold,
+					     alloc_order,
+					     alloc_flags, gfp_mask);
+	return true;
+}
+
+static void order2_kswapd_mark_try_sleep(pg_data_t *pgdat)
+{
+	struct order2_kswapd_wake_sample *sample;
+	u64 epoch;
+
+	if (!kswapd_order2_wakeup_threshold)
+		return;
+
+	sample = &order2_kswapd_wake[pgdat->node_id];
+	epoch = atomic64_inc_return(&order2_kswapd_wake_epoch);
+	WRITE_ONCE(sample->try_sleep_epoch, epoch);
+
+	atomic_set_release(&sample->state, ORDER2_KSWAPD_TRY_SLEEP);
+}
+
+static bool order2_kswapd_account_pgoutrun(pg_data_t *pgdat)
+{
+	struct order2_kswapd_wake_sample *sample;
+	unsigned long first_wake_free, pgoutrun_free;
+	struct zone *zone;
+	u64 first_wake_epoch, first_wake_ns, now_ns;
+	int state, zidx;
+
+	if (!kswapd_order2_wakeup_threshold)
+		return false;
+
+	sample = &order2_kswapd_wake[pgdat->node_id];
+	while (atomic_read(&sample->state) == ORDER2_KSWAPD_WAKE_RECORDING)
+		cpu_relax();
+
+	state = atomic_xchg(&sample->state, ORDER2_KSWAPD_ACTIVE);
+	if (state != ORDER2_KSWAPD_WAKE_RECORDED)
+		return false;
+
+	smp_rmb();
+	zidx = sample->first_wake_zidx;
+	if (zidx < 0 || zidx >= MAX_NR_ZONES)
+		return false;
+
+	zone = &pgdat->node_zones[zidx];
+	if (!managed_zone(zone))
+		return false;
+
+	first_wake_epoch = sample->first_wake_epoch;
+	first_wake_ns = sample->first_wake_ns;
+	first_wake_free = sample->first_wake_free;
+	pgoutrun_free = zone_free_order2_equiv(zone);
+	now_ns = ktime_get_mono_fast_ns();
+
+	count_order2_free_bucket(PGWAKE_ORDER2_FIRST_B0, first_wake_free);
+	count_order2_free_bucket(PGOUTRUN_ORDER2_B0, pgoutrun_free);
+	if (now_ns >= first_wake_ns)
+		count_order2_wake_to_pgoutrun_us(now_ns - first_wake_ns);
+	count_order2_wake_to_pgoutrun_delta((long)pgoutrun_free -
+					     (long)first_wake_free);
+	trace_mm_order2_kswapd_pgoutrun(first_wake_epoch, pgdat->node_id, zidx,
+					 first_wake_ns, now_ns, first_wake_free,
+					 pgoutrun_free);
+
+	return true;
+}
 
 #ifdef CONFIG_MEMCG
 
@@ -481,6 +853,9 @@ void drop_slab(void)
 		BUILD_BUG_ON(PGSTEAL_ORDER2_##type -			\
 			     PGSTEAL_ORDER2_KSWAPD !=			\
 			     PGSTEAL_##type - PGSTEAL_KSWAPD);		\
+		BUILD_BUG_ON(PGSTEAL_ORDER10_##type -			\
+			     PGSTEAL_ORDER10_KSWAPD !=			\
+			     PGSTEAL_##type - PGSTEAL_KSWAPD);		\
 	} while (0)
 
 static int reclaimer_offset(struct scan_control *sc)
@@ -488,6 +863,8 @@ static int reclaimer_offset(struct scan_control *sc)
 	CHECK_RECLAIMER_OFFSET(DIRECT);
 	CHECK_RECLAIMER_OFFSET(KHUGEPAGED);
 	CHECK_RECLAIMER_OFFSET(PROACTIVE);
+	BUILD_BUG_ON(PGSTEAL_ORDER10_PROACTIVE - PGSTEAL_ORDER_KSWAPD + 1 !=
+		     NR_PAGE_ORDERS * NR_VM_RECLAIMER_TYPES);
 
 	if (current_is_kswapd())
 		return 0;
@@ -496,6 +873,18 @@ static int reclaimer_offset(struct scan_control *sc)
 	if (sc->proactive)
 		return PGSTEAL_PROACTIVE - PGSTEAL_KSWAPD;
 	return PGSTEAL_DIRECT - PGSTEAL_KSWAPD;
+}
+
+static void reclaim_stat_add_reclaimed_folio(struct reclaim_stat *stat,
+						     struct folio *folio,
+						     unsigned int nr_pages)
+{
+	unsigned int order = folio_order(folio);
+
+	if (unlikely(order >= ARRAY_SIZE(stat->nr_reclaimed_ordbkt)))
+		order = ARRAY_SIZE(stat->nr_reclaimed_ordbkt) - 1;
+
+	stat->nr_reclaimed_ordbkt[order] += nr_pages;
 }
 
 static inline int is_page_cache_freeable(struct folio *folio)
@@ -1556,7 +1945,7 @@ retry:
 					 * leave it off the LRU).
 					 */
 					nr_reclaimed += nr_pages;
-					stat->nr_reclaimed_ordbkt[folio_order(folio) >> 1] += nr_pages;
+					reclaim_stat_add_reclaimed_folio(stat, folio, nr_pages);
 					continue;
 				}
 			}
@@ -1587,7 +1976,7 @@ free_it:
 		 * all pages in it.
 		 */
 		nr_reclaimed += nr_pages;
-		stat->nr_reclaimed_ordbkt[folio_order(folio) >> 1] += nr_pages;
+		reclaim_stat_add_reclaimed_folio(stat, folio, nr_pages);
 
 		folio_unqueue_deferred_split(folio);
 		if (folio_batch_add(&free_folios, folio) == 0) {
@@ -6673,6 +7062,8 @@ unsigned long try_to_free_pages(struct zonelist *zonelist, int order,
 				gfp_t gfp_mask, nodemask_t *nodemask)
 {
 	unsigned long nr_reclaimed;
+	struct direct_reclaim_handle direct_reclaim_sample;
+	int direct_reclaim_reason;
 	struct scan_control sc = {
 		.nr_to_reclaim = SWAP_CLUSTER_MAX,
 		.gfp_mask = current_gfp_context(gfp_mask),
@@ -6703,9 +7094,14 @@ unsigned long try_to_free_pages(struct zonelist *zonelist, int order,
 
 	set_task_reclaim_state(current, &sc.reclaim_state);
 	trace_mm_vmscan_direct_reclaim_begin(order, sc.gfp_mask);
+	direct_reclaim_reason = __this_cpu_read(last_alloc_stall_reason);
+	direct_reclaim_sample = direct_reclaim_record_begin(order, sc.gfp_mask,
+						     sc.reclaim_idx,
+						     direct_reclaim_reason);
 
 	nr_reclaimed = do_try_to_free_pages(zonelist, &sc);
 
+	direct_reclaim_record_end(direct_reclaim_sample, nr_reclaimed);
 	trace_mm_vmscan_direct_reclaim_end(nr_reclaimed);
 	set_task_reclaim_state(current, NULL);
 
@@ -6855,23 +7251,12 @@ static bool pgdat_watermark_boosted(pg_data_t *pgdat, int highest_zoneidx)
 	return false;
 }
 
-static unsigned long count_free_order_pages(struct zone *zone, int target_order)
-{
-	unsigned long count = 0;
-	int free_order;
-
-	for (free_order = target_order; free_order < NR_PAGE_ORDERS; free_order++)
-		count += zone->free_area[free_order].nr_free <<
-			 (free_order - target_order);
-
-	return count;
-}
-
 /*
  * Returns true if there is an eligible zone balanced for the request order
  * and highest_zoneidx
  */
-static bool pgdat_balanced(pg_data_t *pgdat, int order, int highest_zoneidx)
+static bool pgdat_balanced(pg_data_t *pgdat, int order, int highest_zoneidx,
+			   struct order2_kswapd_trace_context *order2_trace)
 {
 	int i;
 	unsigned long mark = -1;
@@ -6884,6 +7269,7 @@ static bool pgdat_balanced(pg_data_t *pgdat, int order, int highest_zoneidx)
 	for_each_managed_zone_pgdat(zone, pgdat, i, highest_zoneidx) {
 		enum zone_stat_item item;
 		unsigned long free_pages;
+		unsigned long free_order2;
 
 		if (sysctl_numa_balancing_mode & NUMA_BALANCING_MEMORY_TIERING)
 			mark = promo_wmark_pages(zone);
@@ -6930,9 +7316,27 @@ static bool pgdat_balanced(pg_data_t *pgdat, int order, int highest_zoneidx)
 		 * order-2-equivalent free blocks before kswapd considers the node
 		 * balanced. The sysctl defaults to 0, preserving existing behavior.
 		 */
-		if (order == 2 && kswapd_order2_threshold &&
-		    count_free_order_pages(zone, 2) < kswapd_order2_threshold)
-			continue;
+	if (order == 2 && kswapd_order2_threshold) {
+			free_order2 = zone_free_order2_equiv(zone);
+			if (free_order2 < kswapd_order2_threshold)
+				continue;
+
+			if (order2_trace && order2_trace->active &&
+			    !order2_trace->emitted) {
+				struct order2_kswapd_wake_sample *sample;
+				u64 seq;
+
+				sample = &order2_kswapd_wake[pgdat->node_id];
+				if (!READ_ONCE(sample->pending_trace_seq)) {
+					seq = atomic64_inc_return(&order2_kswapd_trace_seq);
+					WRITE_ONCE(sample->pending_trace_zidx, zone_idx(zone));
+					WRITE_ONCE(sample->pending_trace_seq, seq);
+					trace_mm_order2_kswapd_pgdat_balanced(seq,
+						pgdat->node_id, zone_idx(zone), free_order2);
+					order2_trace->emitted = true;
+				}
+			}
+		}
 
 		return true;
 	}
@@ -6988,7 +7392,7 @@ static bool prepare_kswapd_sleep(pg_data_t *pgdat, int order,
 	if (atomic_read(&pgdat->kswapd_failures) >= MAX_RECLAIM_RETRIES)
 		return true;
 
-	if (pgdat_balanced(pgdat, order, highest_zoneidx)) {
+	if (pgdat_balanced(pgdat, order, highest_zoneidx, NULL)) {
 		clear_pgdat_congested(pgdat);
 		return true;
 	}
@@ -7089,6 +7493,8 @@ static int balance_pgdat(pg_data_t *pgdat, int order, int highest_zoneidx)
 	unsigned long zone_boosts[MAX_NR_ZONES] = { 0, };
 	bool boosted;
 	struct zone *zone;
+	unsigned int order2_iters = 0;
+	struct order2_kswapd_trace_context order2_trace = { 0 };
 	struct scan_control sc = {
 		.gfp_mask = GFP_KERNEL,
 		.order = order,
@@ -7100,43 +7506,7 @@ static int balance_pgdat(pg_data_t *pgdat, int order, int highest_zoneidx)
 	__fs_reclaim_acquire(_THIS_IP_);
 
 	count_vm_event(PAGEOUTRUN);
-	{
-		unsigned long order2_free = 0;
-		int z;
-		for (z = 0; z <= highest_zoneidx; z++) {
-			struct zone *z2 = &pgdat->node_zones[z];
-			if (managed_zone(z2))
-				order2_free += z2->free_area[2].nr_free;
-		}
-		if (order2_free == 0)
-			count_vm_event(PGOUTRUN_ORDER2_B0);
-		else if (order2_free == 1)
-			count_vm_event(PGOUTRUN_ORDER2_B1);
-		else if (order2_free <= 3)
-			count_vm_event(PGOUTRUN_ORDER2_B2_3);
-		else if (order2_free <= 7)
-			count_vm_event(PGOUTRUN_ORDER2_B4_7);
-		else if (order2_free <= 15)
-			count_vm_event(PGOUTRUN_ORDER2_B8_15);
-		else if (order2_free <= 31)
-			count_vm_event(PGOUTRUN_ORDER2_B16_31);
-		else if (order2_free <= 63)
-			count_vm_event(PGOUTRUN_ORDER2_B32_63);
-		else if (order2_free <= 127)
-			count_vm_event(PGOUTRUN_ORDER2_B64_127);
-		else if (order2_free <= 255)
-			count_vm_event(PGOUTRUN_ORDER2_B128_255);
-		else if (order2_free <= 511)
-			count_vm_event(PGOUTRUN_ORDER2_B256_511);
-		else if (order2_free <= 1023)
-			count_vm_event(PGOUTRUN_ORDER2_B512_1023);
-		else if (order2_free <= 2047)
-			count_vm_event(PGOUTRUN_ORDER2_B1024_2047);
-		else if (order2_free <= 4095)
-			count_vm_event(PGOUTRUN_ORDER2_B2048_4095);
-		else
-			count_vm_event(PGOUTRUN_ORDER2_B4096_INF);
-	}
+	order2_trace.active = order2_kswapd_account_pgoutrun(pgdat);
 
 	/*
 	 * Account for the reclaim boost. Note that the zone boost is left in
@@ -7161,6 +7531,8 @@ restart:
 		bool was_frozen;
 
 		sc.reclaim_idx = highest_zoneidx;
+		if (order == 2 && kswapd_order2_threshold)
+			order2_iters++;
 
 		/*
 		 * If the number of buffer_heads exceeds the maximum allowed
@@ -7190,7 +7562,8 @@ restart:
 		 * on the grounds that the normal reclaim should be enough to
 		 * re-evaluate if boosting is required when kswapd next wakes.
 		 */
-		balanced = pgdat_balanced(pgdat, sc.order, highest_zoneidx);
+		balanced = pgdat_balanced(pgdat, sc.order, highest_zoneidx,
+					 &order2_trace);
 		if (!balanced && nr_boost_reclaim) {
 			nr_boost_reclaim = 0;
 			goto restart;
@@ -7298,7 +7671,7 @@ restart:
 	 * more order-2 free blocks.
 	 */
 	if (sc.order == 2 && kswapd_order2_threshold &&
-	    !pgdat_balanced(pgdat, 2, highest_zoneidx))
+	    !pgdat_balanced(pgdat, 2, highest_zoneidx, &order2_trace))
 		goto restart;
 
 	if (!sc.nr_reclaimed)
@@ -7336,6 +7709,8 @@ out:
 	__fs_reclaim_release(_THIS_IP_);
 	psi_memstall_leave(&pflags);
 	set_task_reclaim_state(current, NULL);
+	if (order == 2 && kswapd_order2_threshold && order2_iters)
+		count_kswapd_order2_iters(order2_iters);
 
 	/*
 	 * Return the order kswapd stopped reclaiming at as
@@ -7364,12 +7739,29 @@ static enum zone_type kswapd_highest_zoneidx(pg_data_t *pgdat,
 static void kswapd_try_to_sleep(pg_data_t *pgdat, int alloc_order, int reclaim_order,
 				unsigned int highest_zoneidx)
 {
+	struct order2_kswapd_wake_sample *sample;
+	struct zone *zone;
 	long remaining = 0;
+	u64 seq;
+	int zidx;
 	DEFINE_WAIT(wait);
 
 	if (freezing(current) || kthread_should_stop())
 		return;
 
+	sample = &order2_kswapd_wake[pgdat->node_id];
+	seq = READ_ONCE(sample->pending_trace_seq);
+	zidx = READ_ONCE(sample->pending_trace_zidx);
+	if (seq) {
+		WRITE_ONCE(sample->pending_trace_seq, 0);
+		if (zidx >= 0 && zidx < MAX_NR_ZONES) {
+			zone = &pgdat->node_zones[zidx];
+			if (managed_zone(zone))
+				trace_mm_order2_kswapd_try_sleep(seq, pgdat->node_id,
+					zidx, zone_free_order2_equiv(zone));
+		}
+	}
+	order2_kswapd_mark_try_sleep(pgdat);
 	prepare_to_wait(&pgdat->kswapd_wait, &wait, TASK_INTERRUPTIBLE);
 
 	/*
@@ -7542,17 +7934,17 @@ kswapd_try_sleep:
  * has failed or is not needed, still wake up kcompactd if only compaction is
  * needed.
  */
-void wakeup_kswapd(struct zone *zone, gfp_t gfp_flags, int order,
-		   enum zone_type highest_zoneidx)
+enum kswapd_wake_result wakeup_kswapd(struct zone *zone, gfp_t gfp_flags,
+				      int order, enum zone_type highest_zoneidx)
 {
 	pg_data_t *pgdat;
 	enum zone_type curr_idx;
 
 	if (!managed_zone(zone))
-		return;
+		return KSWAPD_WAKEUP_UNMANAGED_ZONE;
 
 	if (!cpuset_zone_allowed(zone, gfp_flags))
-		return;
+		return KSWAPD_WAKEUP_CPUSET_DENIED;
 
 	pgdat = zone->zone_pgdat;
 	curr_idx = READ_ONCE(pgdat->kswapd_highest_zoneidx);
@@ -7564,12 +7956,10 @@ void wakeup_kswapd(struct zone *zone, gfp_t gfp_flags, int order,
 		WRITE_ONCE(pgdat->kswapd_order, order);
 
 	if (!waitqueue_active(&pgdat->kswapd_wait))
-		return;
+		return KSWAPD_WAKEUP_NO_WAITER;
 
 	/* Hopeless node, leave it to direct reclaim if possible */
-	if (atomic_read(&pgdat->kswapd_failures) >= MAX_RECLAIM_RETRIES ||
-	    (pgdat_balanced(pgdat, order, highest_zoneidx) &&
-	     !pgdat_watermark_boosted(pgdat, highest_zoneidx))) {
+	if (atomic_read(&pgdat->kswapd_failures) >= MAX_RECLAIM_RETRIES) {
 		/*
 		 * There may be plenty of free memory available, but it's too
 		 * fragmented for high-order allocations.  Wake up kcompactd
@@ -7583,12 +7973,31 @@ void wakeup_kswapd(struct zone *zone, gfp_t gfp_flags, int order,
 			wakeup_kcompactd(pgdat, order, highest_zoneidx);
 			count_vm_event(KCOMPACTD_WAKE_VMSCAN);
 		}
-		return;
+		return KSWAPD_WAKEUP_MAX_FAILURES;
+	}
+
+	if (pgdat_balanced(pgdat, order, highest_zoneidx, NULL) &&
+	    !pgdat_watermark_boosted(pgdat, highest_zoneidx)) {
+		/*
+		 * There may be plenty of free memory available, but it's too
+		 * fragmented for high-order allocations.  Wake up kcompactd
+		 * and rely on compaction_suitable() to determine if it's
+		 * needed.  If it fails, it will defer subsequent attempts to
+		 * ratelimit its work.
+		 */
+		if (!(gfp_flags & __GFP_DIRECT_RECLAIM)) {
+			set_bit(KCOMPACTD_WAKE_REASON_VMSCAN,
+				&kcompactd_wake_reasons_bitmap);
+			wakeup_kcompactd(pgdat, order, highest_zoneidx);
+			count_vm_event(KCOMPACTD_WAKE_VMSCAN);
+		}
+		return KSWAPD_WAKEUP_BALANCED;
 	}
 
 	trace_mm_vmscan_wakeup_kswapd(pgdat->node_id, highest_zoneidx, order,
 				      gfp_flags);
 	wake_up_interruptible(&pgdat->kswapd_wait);
+	return KSWAPD_WAKEUP_ISSUED;
 }
 
 #ifdef CONFIG_HIBERNATION

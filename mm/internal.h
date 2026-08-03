@@ -1665,4 +1665,23 @@ extern unsigned long kcompactd_wake_reasons_bitmap;
 extern unsigned long sysctl_compact_order2_threshold;
 extern unsigned long sysctl_compact_order2_alloc_wake;
 
+static inline unsigned long zone_free_order2_equiv(struct zone *zone)
+{
+	unsigned long free = 0;
+	int order;
+
+	for (order = 2; order < NR_PAGE_ORDERS; order++)
+		free += zone->free_area[order].nr_free << (order - 2);
+
+	return free;
+}
+
+bool order2_kswapd_record_first_wake(struct zone *zone,
+					     unsigned long free_order2,
+					     unsigned long threshold,
+					     unsigned int alloc_order,
+					     gfp_t gfp_mask,
+					     unsigned int alloc_flags,
+					     u64 *wake_epoch);
+
 #endif	/* __MM_INTERNAL_H */

@@ -112,6 +112,198 @@ TRACE_EVENT(mm_vmscan_wakeup_kswapd,
 		show_gfp_flags(__entry->gfp_flags))
 );
 
+TRACE_EVENT(mm_order2_kswapd_first_wake,
+
+	TP_PROTO(u64 epoch, int nid, int zid, u64 wake_ns,
+		 unsigned long free_order2, unsigned long threshold,
+		 unsigned int alloc_order,
+		 unsigned int alloc_flags, gfp_t gfp_flags),
+
+	TP_ARGS(epoch, nid, zid, wake_ns, free_order2, threshold, alloc_order,
+		alloc_flags, gfp_flags),
+
+	TP_STRUCT__entry(
+		__field(u64, epoch)
+		__field(int, nid)
+		__field(int, zid)
+		__field(u64, wake_ns)
+		__field(unsigned long, free_order2)
+		__field(unsigned long, threshold)
+		__field(unsigned int, alloc_order)
+		__field(unsigned int, alloc_flags)
+		__field(unsigned long, gfp_flags)
+	),
+
+	TP_fast_assign(
+		__entry->epoch = epoch;
+		__entry->nid = nid;
+		__entry->zid = zid;
+		__entry->wake_ns = wake_ns;
+		__entry->free_order2 = free_order2;
+		__entry->threshold = threshold;
+		__entry->alloc_order = alloc_order;
+		__entry->alloc_flags = alloc_flags;
+		__entry->gfp_flags = (__force unsigned long)gfp_flags;
+	),
+
+	TP_printk("epoch=%llu nid=%d zid=%d wake_ns=%llu free_order2=%lu threshold=%lu alloc_order=%u alloc_flags=%#x gfp_flags=%s",
+		__entry->epoch, __entry->nid, __entry->zid, __entry->wake_ns,
+		__entry->free_order2, __entry->threshold,
+		__entry->alloc_order, __entry->alloc_flags,
+		show_gfp_flags(__entry->gfp_flags))
+);
+
+TRACE_EVENT(mm_order2_kswapd_wake_gate,
+
+	TP_PROTO(u64 epoch, int nid, int zid, int order,
+		 int highest_zoneidx, int result),
+
+	TP_ARGS(epoch, nid, zid, order, highest_zoneidx, result),
+
+	TP_STRUCT__entry(
+		__field(u64, epoch)
+		__field(int, nid)
+		__field(int, zid)
+		__field(int, order)
+		__field(int, highest_zoneidx)
+		__field(int, result)
+	),
+
+	TP_fast_assign(
+		__entry->epoch = epoch;
+		__entry->nid = nid;
+		__entry->zid = zid;
+		__entry->order = order;
+		__entry->highest_zoneidx = highest_zoneidx;
+		__entry->result = result;
+	),
+
+	TP_printk("epoch=%llu nid=%d zid=%d order=%d highest_zoneidx=%d result=%d",
+		__entry->epoch, __entry->nid, __entry->zid, __entry->order,
+		__entry->highest_zoneidx, __entry->result)
+);
+
+TRACE_EVENT(mm_order2_kswapd_pgoutrun,
+
+	TP_PROTO(u64 epoch, int nid, int zid, u64 wake_ns, u64 pgoutrun_ns,
+		 unsigned long first_free, unsigned long pgoutrun_free),
+
+	TP_ARGS(epoch, nid, zid, wake_ns, pgoutrun_ns, first_free,
+		pgoutrun_free),
+
+	TP_STRUCT__entry(
+		__field(u64, epoch)
+		__field(int, nid)
+		__field(int, zid)
+		__field(u64, wake_ns)
+		__field(u64, pgoutrun_ns)
+		__field(unsigned long, first_free)
+		__field(unsigned long, pgoutrun_free)
+	),
+
+	TP_fast_assign(
+		__entry->epoch = epoch;
+		__entry->nid = nid;
+		__entry->zid = zid;
+		__entry->wake_ns = wake_ns;
+		__entry->pgoutrun_ns = pgoutrun_ns;
+		__entry->first_free = first_free;
+		__entry->pgoutrun_free = pgoutrun_free;
+	),
+
+	TP_printk("epoch=%llu nid=%d zid=%d wake_ns=%llu pgoutrun_ns=%llu first_free=%lu pgoutrun_free=%lu",
+		__entry->epoch, __entry->nid, __entry->zid, __entry->wake_ns,
+		__entry->pgoutrun_ns, __entry->first_free,
+		__entry->pgoutrun_free)
+);
+
+TRACE_EVENT(mm_order2_kswapd_pgdat_balanced,
+
+	TP_PROTO(u64 seq, int nid, int zid, unsigned long free_order2),
+
+	TP_ARGS(seq, nid, zid, free_order2),
+
+	TP_STRUCT__entry(
+		__field(u64, seq)
+		__field(int, nid)
+		__field(int, zid)
+		__field(unsigned long, free_order2)
+	),
+
+	TP_fast_assign(
+		__entry->seq = seq;
+		__entry->nid = nid;
+		__entry->zid = zid;
+		__entry->free_order2 = free_order2;
+	),
+
+	TP_printk("seq=%llu nid=%d zid=%d free_order2=%lu",
+		__entry->seq, __entry->nid, __entry->zid,
+		__entry->free_order2)
+);
+
+TRACE_EVENT(mm_order2_kswapd_try_sleep,
+
+	TP_PROTO(u64 seq, int nid, int zid, unsigned long free_order2),
+
+	TP_ARGS(seq, nid, zid, free_order2),
+
+	TP_STRUCT__entry(
+		__field(u64, seq)
+		__field(int, nid)
+		__field(int, zid)
+		__field(unsigned long, free_order2)
+	),
+
+	TP_fast_assign(
+		__entry->seq = seq;
+		__entry->nid = nid;
+		__entry->zid = zid;
+		__entry->free_order2 = free_order2;
+	),
+
+	TP_printk("seq=%llu nid=%d zid=%d free_order2=%lu",
+		__entry->seq, __entry->nid, __entry->zid,
+		__entry->free_order2)
+);
+
+TRACE_EVENT(mm_order2_buddy_alloc_cross,
+
+	TP_PROTO(int nid, int zid, unsigned long pre_free,
+		 unsigned long post_free, unsigned long threshold,
+		 int alloc_order, int source_order, int migratetype),
+
+	TP_ARGS(nid, zid, pre_free, post_free, threshold, alloc_order,
+		source_order, migratetype),
+
+	TP_STRUCT__entry(
+		__field(int, nid)
+		__field(int, zid)
+		__field(unsigned long, pre_free)
+		__field(unsigned long, post_free)
+		__field(unsigned long, threshold)
+		__field(int, alloc_order)
+		__field(int, source_order)
+		__field(int, migratetype)
+	),
+
+	TP_fast_assign(
+		__entry->nid = nid;
+		__entry->zid = zid;
+		__entry->pre_free = pre_free;
+		__entry->post_free = post_free;
+		__entry->threshold = threshold;
+		__entry->alloc_order = alloc_order;
+		__entry->source_order = source_order;
+		__entry->migratetype = migratetype;
+	),
+
+	TP_printk("nid=%d zid=%d pre_free=%lu post_free=%lu threshold=%lu alloc_order=%d source_order=%d migratetype=%d",
+		__entry->nid, __entry->zid, __entry->pre_free,
+		__entry->post_free, __entry->threshold, __entry->alloc_order,
+		__entry->source_order, __entry->migratetype)
+);
+
 DECLARE_EVENT_CLASS(mm_vmscan_direct_reclaim_begin_template,
 
 	TP_PROTO(int order, gfp_t gfp_flags),
