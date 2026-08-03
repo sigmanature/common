@@ -9,6 +9,7 @@
 #include <linux/page_owner.h>
 #include <linux/page_idle.h>
 #include <linux/page_table_check.h>
+#include <linux/order0_provenance.h>
 #include <linux/rcupdate.h>
 #include <linux/pgalloc_tag.h>
 
@@ -77,6 +78,9 @@ static struct page_ext_operations page_idle_ops __initdata = {
 #endif
 
 static struct page_ext_operations *page_ext_ops[] __initdata = {
+#ifdef CONFIG_MTHP_ORDER0_PROVENANCE
+	&order0_provenance_ops,
+#endif
 #ifdef CONFIG_PAGE_OWNER
 	&page_owner_ops,
 #endif

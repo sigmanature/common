@@ -173,6 +173,9 @@ enum zone_stat_item {
 	NR_ZSPAGES,		/* allocated in zsmalloc */
 #endif
 	NR_FREE_CMA_PAGES,
+	NR_PCP_ORDER0_MOVABLE,
+	NR_PCP_ORDER0_UNMOVABLE,
+	NR_PCP_ORDER0_OTHER,
 #ifdef CONFIG_UNACCEPTED_MEMORY
 	NR_UNACCEPTED,
 #endif
@@ -1538,8 +1541,18 @@ static inline unsigned long pgdat_end_pfn(pg_data_t *pgdat)
 #include <linux/memory_hotplug.h>
 
 void build_all_zonelists(pg_data_t *pgdat);
-void wakeup_kswapd(struct zone *zone, gfp_t gfp_mask, int order,
-		   enum zone_type highest_zoneidx);
+enum kswapd_wake_result {
+	KSWAPD_WAKEUP_UNMANAGED_ZONE,
+	KSWAPD_WAKEUP_CPUSET_DENIED,
+	KSWAPD_WAKEUP_NO_WAITER,
+	KSWAPD_WAKEUP_MAX_FAILURES,
+	KSWAPD_WAKEUP_BALANCED,
+	KSWAPD_WAKEUP_ISSUED,
+};
+
+enum kswapd_wake_result wakeup_kswapd(struct zone *zone, gfp_t gfp_mask,
+				      int order,
+				      enum zone_type highest_zoneidx);
 bool __zone_watermark_ok_raw(struct zone *z, unsigned int order, unsigned long mark,
 			      int highest_zoneidx, unsigned int alloc_flags,
 			      long free_pages, bool direct_reclaim);

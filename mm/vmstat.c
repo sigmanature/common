@@ -18,6 +18,7 @@
 #include <linux/cpu.h>
 #include <linux/cpumask.h>
 #include <linux/vmstat.h>
+#include <linux/order0_provenance.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 #include <linux/debugfs.h>
@@ -1210,6 +1211,9 @@ const char * const vmstat_text[] = {
 	[I(NR_ZSPAGES)]				= "nr_zspages",
 #endif
 	[I(NR_FREE_CMA_PAGES)]			= "nr_free_cma",
+	[I(NR_PCP_ORDER0_MOVABLE)]		= "nr_pcp_order0_movable",
+	[I(NR_PCP_ORDER0_UNMOVABLE)]		= "nr_pcp_order0_unmovable",
+	[I(NR_PCP_ORDER0_OTHER)]			= "nr_pcp_order0_other",
 #ifdef CONFIG_UNACCEPTED_MEMORY
 	[I(NR_UNACCEPTED)]			= "nr_unaccepted",
 #endif
@@ -1338,10 +1342,46 @@ const char * const vmstat_text[] = {
 	[I(PGSTEAL_ORDER_DIRECT)]		= "pgsteal_order0_direct",
 	[I(PGSTEAL_ORDER_KHUGEPAGED)]		= "pgsteal_order0_khugepaged",
 	[I(PGSTEAL_ORDER_PROACTIVE)]		= "pgsteal_order0_proactive",
+	[I(PGSTEAL_ORDER1_KSWAPD)]		= "pgsteal_order1_kswapd",
+	[I(PGSTEAL_ORDER1_DIRECT)]		= "pgsteal_order1_direct",
+	[I(PGSTEAL_ORDER1_KHUGEPAGED)]		= "pgsteal_order1_khugepaged",
+	[I(PGSTEAL_ORDER1_PROACTIVE)]		= "pgsteal_order1_proactive",
 	[I(PGSTEAL_ORDER2_KSWAPD)]		= "pgsteal_order2_kswapd",
 	[I(PGSTEAL_ORDER2_DIRECT)]		= "pgsteal_order2_direct",
 	[I(PGSTEAL_ORDER2_KHUGEPAGED)]		= "pgsteal_order2_khugepaged",
 	[I(PGSTEAL_ORDER2_PROACTIVE)]		= "pgsteal_order2_proactive",
+	[I(PGSTEAL_ORDER3_KSWAPD)]		= "pgsteal_order3_kswapd",
+	[I(PGSTEAL_ORDER3_DIRECT)]		= "pgsteal_order3_direct",
+	[I(PGSTEAL_ORDER3_KHUGEPAGED)]		= "pgsteal_order3_khugepaged",
+	[I(PGSTEAL_ORDER3_PROACTIVE)]		= "pgsteal_order3_proactive",
+	[I(PGSTEAL_ORDER4_KSWAPD)]		= "pgsteal_order4_kswapd",
+	[I(PGSTEAL_ORDER4_DIRECT)]		= "pgsteal_order4_direct",
+	[I(PGSTEAL_ORDER4_KHUGEPAGED)]		= "pgsteal_order4_khugepaged",
+	[I(PGSTEAL_ORDER4_PROACTIVE)]		= "pgsteal_order4_proactive",
+	[I(PGSTEAL_ORDER5_KSWAPD)]		= "pgsteal_order5_kswapd",
+	[I(PGSTEAL_ORDER5_DIRECT)]		= "pgsteal_order5_direct",
+	[I(PGSTEAL_ORDER5_KHUGEPAGED)]		= "pgsteal_order5_khugepaged",
+	[I(PGSTEAL_ORDER5_PROACTIVE)]		= "pgsteal_order5_proactive",
+	[I(PGSTEAL_ORDER6_KSWAPD)]		= "pgsteal_order6_kswapd",
+	[I(PGSTEAL_ORDER6_DIRECT)]		= "pgsteal_order6_direct",
+	[I(PGSTEAL_ORDER6_KHUGEPAGED)]		= "pgsteal_order6_khugepaged",
+	[I(PGSTEAL_ORDER6_PROACTIVE)]		= "pgsteal_order6_proactive",
+	[I(PGSTEAL_ORDER7_KSWAPD)]		= "pgsteal_order7_kswapd",
+	[I(PGSTEAL_ORDER7_DIRECT)]		= "pgsteal_order7_direct",
+	[I(PGSTEAL_ORDER7_KHUGEPAGED)]		= "pgsteal_order7_khugepaged",
+	[I(PGSTEAL_ORDER7_PROACTIVE)]		= "pgsteal_order7_proactive",
+	[I(PGSTEAL_ORDER8_KSWAPD)]		= "pgsteal_order8_kswapd",
+	[I(PGSTEAL_ORDER8_DIRECT)]		= "pgsteal_order8_direct",
+	[I(PGSTEAL_ORDER8_KHUGEPAGED)]		= "pgsteal_order8_khugepaged",
+	[I(PGSTEAL_ORDER8_PROACTIVE)]		= "pgsteal_order8_proactive",
+	[I(PGSTEAL_ORDER9_KSWAPD)]		= "pgsteal_order9_kswapd",
+	[I(PGSTEAL_ORDER9_DIRECT)]		= "pgsteal_order9_direct",
+	[I(PGSTEAL_ORDER9_KHUGEPAGED)]		= "pgsteal_order9_khugepaged",
+	[I(PGSTEAL_ORDER9_PROACTIVE)]		= "pgsteal_order9_proactive",
+	[I(PGSTEAL_ORDER10_KSWAPD)]		= "pgsteal_order10_kswapd",
+	[I(PGSTEAL_ORDER10_DIRECT)]		= "pgsteal_order10_direct",
+	[I(PGSTEAL_ORDER10_KHUGEPAGED)]		= "pgsteal_order10_khugepaged",
+	[I(PGSTEAL_ORDER10_PROACTIVE)]		= "pgsteal_order10_proactive",
 	[I(PGSCAN_KSWAPD)]			= "pgscan_kswapd",
 	[I(PGSCAN_DIRECT)]			= "pgscan_direct",
 	[I(PGSCAN_KHUGEPAGED)]			= "pgscan_khugepaged",
@@ -1376,6 +1416,41 @@ const char * const vmstat_text[] = {
 	[I(PGOUTRUN_ORDER2_B1024_2047)]		= "pgoutrun_order2_b1024_2047",
 	[I(PGOUTRUN_ORDER2_B2048_4095)]		= "pgoutrun_order2_b2048_4095",
 	[I(PGOUTRUN_ORDER2_B4096_INF)]		= "pgoutrun_order2_b4096_inf",
+	[I(PGWAKE_ORDER2_FIRST_B0)]		= "pgwake_order2_first_b0",
+	[I(PGWAKE_ORDER2_FIRST_B1)]		= "pgwake_order2_first_b1",
+	[I(PGWAKE_ORDER2_FIRST_B2_3)]		= "pgwake_order2_first_b2_3",
+	[I(PGWAKE_ORDER2_FIRST_B4_7)]		= "pgwake_order2_first_b4_7",
+	[I(PGWAKE_ORDER2_FIRST_B8_15)]		= "pgwake_order2_first_b8_15",
+	[I(PGWAKE_ORDER2_FIRST_B16_31)]		= "pgwake_order2_first_b16_31",
+	[I(PGWAKE_ORDER2_FIRST_B32_63)]		= "pgwake_order2_first_b32_63",
+	[I(PGWAKE_ORDER2_FIRST_B64_127)]		= "pgwake_order2_first_b64_127",
+	[I(PGWAKE_ORDER2_FIRST_B128_255)]	= "pgwake_order2_first_b128_255",
+	[I(PGWAKE_ORDER2_FIRST_B256_511)]	= "pgwake_order2_first_b256_511",
+	[I(PGWAKE_ORDER2_FIRST_B512_1023)]	= "pgwake_order2_first_b512_1023",
+	[I(PGWAKE_ORDER2_FIRST_B1024_2047)]	= "pgwake_order2_first_b1024_2047",
+	[I(PGWAKE_ORDER2_FIRST_B2048_4095)]	= "pgwake_order2_first_b2048_4095",
+	[I(PGWAKE_ORDER2_FIRST_B4096_INF)]	= "pgwake_order2_first_b4096_inf",
+	[I(PGWAKE_TO_PGOUTRUN_US_B0_99)]		= "pgwake_to_pgoutrun_us_b0_99",
+	[I(PGWAKE_TO_PGOUTRUN_US_B100_499)]	= "pgwake_to_pgoutrun_us_b100_499",
+	[I(PGWAKE_TO_PGOUTRUN_US_B500_999)]	= "pgwake_to_pgoutrun_us_b500_999",
+	[I(PGWAKE_TO_PGOUTRUN_US_B1000_4999)]	= "pgwake_to_pgoutrun_us_b1000_4999",
+	[I(PGWAKE_TO_PGOUTRUN_US_B5000_9999)]	= "pgwake_to_pgoutrun_us_b5000_9999",
+	[I(PGWAKE_TO_PGOUTRUN_US_B10000_49999)] = "pgwake_to_pgoutrun_us_b10000_49999",
+	[I(PGWAKE_TO_PGOUTRUN_US_B50000_INF)]	= "pgwake_to_pgoutrun_us_b50000_inf",
+	[I(PGWAKE_TO_PGOUTRUN_DELTA_NEG4096_INF)] = "pgwake_to_pgoutrun_delta_neg4096_inf",
+	[I(PGWAKE_TO_PGOUTRUN_DELTA_NEG2048_4095)] = "pgwake_to_pgoutrun_delta_neg2048_4095",
+	[I(PGWAKE_TO_PGOUTRUN_DELTA_NEG1024_2047)] = "pgwake_to_pgoutrun_delta_neg1024_2047",
+	[I(PGWAKE_TO_PGOUTRUN_DELTA_NEG1_1023)] = "pgwake_to_pgoutrun_delta_neg1_1023",
+	[I(PGWAKE_TO_PGOUTRUN_DELTA_ZERO)]	= "pgwake_to_pgoutrun_delta_zero",
+	[I(PGWAKE_TO_PGOUTRUN_DELTA_POS1_1023)] = "pgwake_to_pgoutrun_delta_pos1_1023",
+	[I(PGWAKE_TO_PGOUTRUN_DELTA_POS1024_2047)] = "pgwake_to_pgoutrun_delta_pos1024_2047",
+	[I(PGWAKE_TO_PGOUTRUN_DELTA_POS2048_4095)] = "pgwake_to_pgoutrun_delta_pos2048_4095",
+	[I(PGWAKE_TO_PGOUTRUN_DELTA_POS4096_INF)] = "pgwake_to_pgoutrun_delta_pos4096_inf",
+	[I(KSWAPD_ORDER2_ITERS_B1)]		= "kswapd_order2_iters_b1",
+	[I(KSWAPD_ORDER2_ITERS_B2_3)]		= "kswapd_order2_iters_b2_3",
+	[I(KSWAPD_ORDER2_ITERS_B4_7)]		= "kswapd_order2_iters_b4_7",
+	[I(KSWAPD_ORDER2_ITERS_B8_15)]		= "kswapd_order2_iters_b8_15",
+	[I(KSWAPD_ORDER2_ITERS_B16_INF)]	= "kswapd_order2_iters_b16_inf",
 
 	[I(PGROTATED)]				= "pgrotated",
 
@@ -1987,6 +2062,7 @@ static int vmstat_show(struct seq_file *m, void *arg)
 		 * breaking userspace which might depend on them being present.
 		 */
 		seq_puts(m, "nr_unstable 0\n");
+		order0_provenance_vmstat_show(m);
 	}
 	return 0;
 }
