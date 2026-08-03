@@ -18,11 +18,11 @@
 #include <linux/slab.h>
 #include <linux/sched.h>
 #include <linux/list_lru.h>
-#include <linux/mthp_alloc_counter.h>
 #include <linux/ratelimit.h>
 #include <asm/cacheflush.h>
 #include <linux/uaccess.h>
 #include <linux/highmem.h>
+#include <linux/order0_provenance.h>
 #include <linux/sizes.h>
 #include <kunit/visibility.h>
 #include "binder_alloc.h"
@@ -288,7 +288,8 @@ static struct page *binder_page_alloc(struct binder_alloc *alloc,
 	page = alloc_page(GFP_KERNEL | __GFP_HIGHMEM | __GFP_ZERO);
 	if (!page)
 		return NULL;
-	mthp_count_residual_order0(MTHP_RESIDUAL_ORDER0_BINDER_BUFFER);
+	order0_provenance_record_root(page_folio(page),
+				      ORDER0_SOURCE_BINDER_BUFFER);
 
 	/* allocate and install shrinker metadata under page->private */
 	mdata = kzalloc(sizeof(*mdata), GFP_KERNEL);
