@@ -38,10 +38,12 @@
 #include <linux/vmstat.h>
 #include <linux/fault-inject.h>
 #include <linux/compaction.h>
+#include <linux/ktime.h>
 #include <trace/events/kmem.h>
 #include <trace/events/oom.h>
 #include <trace/events/page_alloc.h>
 #include <trace/events/page_alloc.h>
+#include <trace/events/vmscan.h>
 #include <linux/prefetch.h>
 #include <linux/mm_inline.h>
 #include <linux/mmu_notifier.h>
@@ -57,6 +59,7 @@
 #include <linux/delayacct.h>
 #include <linux/cacheinfo.h>
 #include <linux/pgalloc_tag.h>
+#include <linux/order0_provenance.h>
 #include <asm/div64.h>
 #include "internal.h"
 #include "shuffle.h"
@@ -64,6 +67,39 @@
 
 /* Proactive kswapd wakeup threshold for order-2 (defined in mm/vmscan.c). */
 extern int kswapd_order2_wakeup_threshold;
+
+/*
+ * Temporary Cuttlefish experiment switch. When enabled, unconstrained
+ * order-0/1 allocations are directed to DMA32 and unconstrained order-2+
+ * allocations never fall back from Normal to DMA32.
+ */
+static bool force_order0_dma32_order2_no_fallback;
+module_param_named(force_order0_dma32_order2_no_fallback,
+			   force_order0_dma32_order2_no_fallback, bool, 0644);
+
+static inline void force_order_lt2_dma32(gfp_t *gfp_mask, unsigned int order)
+{
+	if (!READ_ONCE(force_order0_dma32_order2_no_fallback) ||
+	    order >= 2 ||
+	    (*gfp_mask & (__GFP_DMA | __GFP_DMA32)))
+		return;
+
+	*gfp_mask &= ~__GFP_HIGHMEM;
+	*gfp_mask |= __GFP_DMA32;
+}
+
+static inline bool force_order_ge2_skip_dma32_fallback(gfp_t gfp_mask,
+						 unsigned int order,
+						 const struct zone *zone)
+{
+#ifdef CONFIG_ZONE_DMA32
+	return READ_ONCE(force_order0_dma32_order2_no_fallback) &&
+		order >= 2 && zone_idx(zone) == ZONE_DMA32 &&
+		!(gfp_mask & (__GFP_DMA | __GFP_DMA32));
+#else
+	return false;
+#endif
+}
 
 /* Free Page Internal flags: for internal, non-pcp variants of free_pages(). */
 typedef int __bitwise fpi_t;
@@ -281,6 +317,7 @@ int min_free_kbytes = 1024;
 int user_min_free_kbytes = -1;
 static int watermark_boost_factor __read_mostly = 15000;
 static int watermark_scale_factor = 10;
+static atomic64_t cuttlefish_normal_wmark_low_high_kbytes = ATOMIC64_INIT(0);
 int defrag_mode;
 
 /* movable_zone is the "real" zone pages in ZONE_MOVABLE are taken from */
@@ -1488,6 +1525,8 @@ static void free_pcppages_bulk(struct zone *zone, int count,
 			list_del(&page->pcp_list);
 			count -= nr_pages;
 			pcp->count -= nr_pages;
+			if (!order)
+				order0_provenance_pcp_drain(zone, mt, nr_pages);
 
 			__free_one_page(page, pfn, zone, order, mt, FPI_NONE);
 			trace_mm_page_pcpu_drain(page, order, mt);
@@ -1723,10 +1762,31 @@ static __always_inline void page_del_and_expand(struct zone *zone,
 						int high, int migratetype)
 {
 	int nr_pages = 1 << high;
+	unsigned long threshold = 0;
+	unsigned long pre_free = 0;
+	unsigned long post_free;
+	bool trace_cross = false;
+
+	if (trace_mm_order2_buddy_alloc_cross_enabled()) {
+		threshold = READ_ONCE(kswapd_order2_wakeup_threshold);
+		if (threshold) {
+			pre_free = zone_free_order2_equiv(zone);
+			trace_cross = pre_free >= threshold;
+		}
+	}
 
 	__del_page_from_free_list(page, zone, high, migratetype);
 	nr_pages -= expand(zone, page, low, high, migratetype);
 	account_freepages(zone, -nr_pages, migratetype);
+
+	if (trace_cross) {
+		post_free = zone_free_order2_equiv(zone);
+		if (post_free < threshold)
+			trace_mm_order2_buddy_alloc_cross(zone->zone_pgdat->node_id,
+							   zone_idx(zone), pre_free,
+							   post_free, threshold, low,
+							   high, migratetype);
+	}
 }
 
 static void check_new_page_bad(struct page *page)
@@ -1850,6 +1910,7 @@ inline void post_alloc_hook(struct page *page, unsigned int order,
 	set_page_owner(page, order, gfp_flags);
 	page_table_check_alloc(page, order);
 	pgalloc_tag_add(page, current, 1 << order);
+	order0_provenance_prepare_alloc(page, order);
 }
 
 static void prep_new_page(struct page *page, unsigned int order, gfp_t gfp_flags,
@@ -2833,6 +2894,9 @@ static void free_frozen_page_commit(struct zone *zone,
 	pindex = order_to_pindex(migratetype, order);
 	list_add(&page->pcp_list, &pcp->lists[pindex]);
 	pcp->count += 1 << order;
+	if (!order)
+		order0_provenance_pcp_free(zone,
+			get_pfnblock_migratetype(page, page_to_pfn(page)), 1);
 
 	batch = READ_ONCE(pcp->batch);
 	/*
@@ -3272,6 +3336,14 @@ struct page *__rmqueue_pcplist(struct zone *zone, unsigned int order,
 					migratetype, alloc_flags);
 
 			pcp->count += alloced << order;
+			if (!order) {
+				struct page *pcp_page;
+
+				list_for_each_entry(pcp_page, list, pcp_list)
+					order0_provenance_pcp_refill(zone,
+						get_pfnblock_migratetype(pcp_page,
+							page_to_pfn(pcp_page)), 1);
+			}
 			if (unlikely(list_empty(list)))
 				return NULL;
 		}
@@ -3279,6 +3351,9 @@ struct page *__rmqueue_pcplist(struct zone *zone, unsigned int order,
 		page = list_first_entry(list, struct page, pcp_list);
 		list_del(&page->pcp_list);
 		pcp->count -= 1 << order;
+		if (!order)
+			order0_provenance_pcp_alloc(zone,
+				get_pfnblock_migratetype(page, page_to_pfn(page)), 1);
 	} while (check_new_pages(page, order));
 
 	return page;
@@ -3779,6 +3854,9 @@ retry:
 		struct page *page;
 		unsigned long mark;
 
+		if (force_order_ge2_skip_dma32_fallback(gfp_mask, order, zone))
+			continue;
+
 		if (cpusets_enabled() &&
 			(alloc_flags & ALLOC_CPUSET) &&
 			!__cpuset_zone_allowed(zone, gfp_mask))
@@ -3909,21 +3987,35 @@ check_alloc_wmark:
 
 try_this_zone:
 		/*
-		 * Proactively wake kswapd if order-2 free blocks are running low.
-		 * The sysctl defaults to 0, so this is inactive unless explicitly
-		 * enabled for the experiment.
+		 * Proactively wake kswapd if order-2 free blocks are
+		 * running low. Check on every allocation (not just order-2)
+		 * because order-0/1 allocations can split higher-order blocks
+		 * and rapidly deplete order-2 reserves.
 		 */
-		if (order == 2 && kswapd_order2_wakeup_threshold &&
-		    (alloc_flags & ALLOC_KSWAPD)) {
-			unsigned long nr_free_order2 = 0;
-			int free_order;
+		{
+			unsigned long wake_threshold =
+				READ_ONCE(kswapd_order2_wakeup_threshold);
 
-			for (free_order = 2; free_order < NR_PAGE_ORDERS; free_order++)
-				nr_free_order2 += zone->free_area[free_order].nr_free <<
-						  (free_order - 2);
-			if (nr_free_order2 < kswapd_order2_wakeup_threshold)
-				wakeup_kswapd(zone, gfp_mask, order,
-					      ac->highest_zoneidx);
+			if (wake_threshold && (alloc_flags & ALLOC_KSWAPD)) {
+				unsigned long nr_free_order2 = zone_free_order2_equiv(zone);
+
+				if (nr_free_order2 < wake_threshold) {
+					u64 wake_epoch = 0;
+					bool first_wake;
+					enum kswapd_wake_result wake_result;
+
+					first_wake = order2_kswapd_record_first_wake(
+						zone, nr_free_order2, wake_threshold, order,
+						gfp_mask, alloc_flags, &wake_epoch);
+					wake_result = wakeup_kswapd(zone, gfp_mask, 2,
+								    ac->highest_zoneidx);
+					if (first_wake)
+						trace_mm_order2_kswapd_wake_gate(
+							wake_epoch, zone->zone_pgdat->node_id,
+							zone_idx(zone), 2,
+							ac->highest_zoneidx, wake_result);
+				}
+			}
 		}
 
 		page = rmqueue(zonelist_zone(ac->preferred_zoneref), zone, order,
@@ -4999,15 +5091,21 @@ got_pg:
 	return page;
 }
 
-static inline bool prepare_alloc_pages(gfp_t gfp_mask, unsigned int order,
+static inline bool prepare_alloc_pages(gfp_t *gfp_mask, unsigned int order,
 		int preferred_nid, nodemask_t *nodemask,
 		struct alloc_context *ac, gfp_t *alloc_gfp,
 		unsigned int *alloc_flags)
 {
-	ac->highest_zoneidx = gfp_zone(gfp_mask);
-	ac->zonelist = node_zonelist(preferred_nid, gfp_mask);
+	gfp_t effective_gfp = *gfp_mask;
+
+	force_order_lt2_dma32(&effective_gfp, order);
+	*gfp_mask = effective_gfp;
+	force_order_lt2_dma32(alloc_gfp, order);
+
+	ac->highest_zoneidx = gfp_zone(effective_gfp);
+	ac->zonelist = node_zonelist(preferred_nid, effective_gfp);
 	ac->nodemask = nodemask;
-	ac->migratetype = gfp_migratetype(gfp_mask);
+	ac->migratetype = gfp_migratetype(effective_gfp);
 
 	if (cpusets_enabled()) {
 		*alloc_gfp |= __GFP_HARDWALL;
@@ -5021,20 +5119,20 @@ static inline bool prepare_alloc_pages(gfp_t gfp_mask, unsigned int order,
 			*alloc_flags |= ALLOC_CPUSET;
 	}
 
-	might_alloc(gfp_mask);
+	might_alloc(effective_gfp);
 
 	/*
 	 * Don't invoke should_fail logic, since it may call
 	 * get_random_u32() and printk() which need to spin_lock.
 	 */
 	if (!(*alloc_flags & ALLOC_TRYLOCK) &&
-	    should_fail_alloc_page(gfp_mask, order))
+	    should_fail_alloc_page(effective_gfp, order))
 		return false;
 
-	*alloc_flags = gfp_to_alloc_flags_cma(gfp_mask, *alloc_flags);
+	*alloc_flags = gfp_to_alloc_flags_cma(effective_gfp, *alloc_flags);
 
 	/* Dirty zone balancing only done in the fast path */
-	ac->spread_dirty_pages = (gfp_mask & __GFP_WRITE);
+	ac->spread_dirty_pages = (effective_gfp & __GFP_WRITE);
 
 	/*
 	 * The preferred zone is used for statistics but crucially it is
@@ -5116,7 +5214,8 @@ unsigned long alloc_pages_bulk_noprof(gfp_t gfp, int preferred_nid,
 	/* May set ALLOC_NOFRAGMENT, fragmentation will return 1 page. */
 	gfp &= gfp_allowed_mask;
 	alloc_gfp = gfp;
-	if (!prepare_alloc_pages(gfp, 0, preferred_nid, nodemask, &ac, &alloc_gfp, &alloc_flags))
+	if (!prepare_alloc_pages(&gfp, 0, preferred_nid, nodemask, &ac,
+				 &alloc_gfp, &alloc_flags))
 		goto out;
 	gfp = alloc_gfp;
 
@@ -5242,7 +5341,7 @@ struct page *__alloc_frozen_pages_noprof(gfp_t gfp, unsigned int order,
 	 */
 	gfp = current_gfp_context(gfp);
 	alloc_gfp = gfp;
-	if (!prepare_alloc_pages(gfp, order, preferred_nid, nodemask, &ac,
+	if (!prepare_alloc_pages(&gfp, order, preferred_nid, nodemask, &ac,
 			&alloc_gfp, &alloc_flags))
 		return NULL;
 
@@ -6428,6 +6527,11 @@ static void __setup_per_zone_wmarks(void)
 
 	for_each_zone(zone) {
 		u64 tmp;
+		u64 normal_wmark_targets;
+		unsigned long normal_low_kbytes;
+		unsigned long normal_high_kbytes;
+		unsigned long normal_low_pages;
+		unsigned long normal_high_pages;
 
 		spin_lock_irqsave(&zone->lock, flags);
 		tmp = (u64)pages_min * zone_managed_pages(zone);
@@ -6468,6 +6572,21 @@ static void __setup_per_zone_wmarks(void)
 		zone->_watermark[WMARK_LOW]  = min_wmark_pages(zone) + tmp;
 		zone->_watermark[WMARK_HIGH] = low_wmark_pages(zone) + tmp;
 		zone->_watermark[WMARK_PROMO] = high_wmark_pages(zone) + tmp;
+
+		normal_wmark_targets = atomic64_read(
+			&cuttlefish_normal_wmark_low_high_kbytes);
+		normal_low_kbytes = lower_32_bits(normal_wmark_targets);
+		normal_high_kbytes = upper_32_bits(normal_wmark_targets);
+		normal_low_pages = normal_low_kbytes >> (PAGE_SHIFT - 10);
+		normal_high_pages = normal_high_kbytes >> (PAGE_SHIFT - 10);
+		if (zone_idx(zone) == ZONE_NORMAL && normal_low_pages &&
+		    normal_high_pages > normal_low_pages &&
+		    normal_low_pages > min_wmark_pages(zone) &&
+		    normal_high_pages < zone_managed_pages(zone)) {
+			zone->_watermark[WMARK_LOW] = normal_low_pages;
+			zone->_watermark[WMARK_HIGH] = normal_high_pages;
+			zone->_watermark[WMARK_PROMO] = normal_high_pages + tmp;
+		}
 		trace_mm_setup_per_zone_wmarks(zone);
 
 		spin_unlock_irqrestore(&zone->lock, flags);
@@ -6592,6 +6711,53 @@ static int watermark_scale_factor_sysctl_handler(const struct ctl_table *table, 
 	if (write)
 		setup_per_zone_wmarks();
 
+	return 0;
+}
+
+static int cuttlefish_normal_wmark_sysctl_handler(const struct ctl_table *table,
+		int write, void *buffer, size_t *length, loff_t *ppos)
+{
+	struct ctl_table table_copy = *table;
+	struct zone *zone;
+	unsigned long targets[2];
+	unsigned long low_pages;
+	unsigned long high_pages;
+	u64 current_targets;
+	bool found_normal = false;
+	int rc;
+
+	current_targets = atomic64_read(&cuttlefish_normal_wmark_low_high_kbytes);
+	targets[0] = lower_32_bits(current_targets);
+	targets[1] = upper_32_bits(current_targets);
+	table_copy.data = targets;
+	rc = proc_doulongvec_minmax(&table_copy, write, buffer, length, ppos);
+	if (rc || !write)
+		return rc;
+
+	if (!targets[0] && !targets[1])
+		goto apply;
+	if (!targets[0] || !targets[1] || targets[0] >= targets[1] ||
+	    targets[0] & ((PAGE_SIZE >> 10) - 1) ||
+	    targets[1] & ((PAGE_SIZE >> 10) - 1))
+		return -EINVAL;
+
+	low_pages = targets[0] >> (PAGE_SHIFT - 10);
+	high_pages = targets[1] >> (PAGE_SHIFT - 10);
+	for_each_populated_zone(zone) {
+		if (zone_idx(zone) != ZONE_NORMAL)
+			continue;
+		found_normal = true;
+		if (low_pages <= min_wmark_pages(zone) ||
+		    high_pages >= zone_managed_pages(zone))
+			return -EINVAL;
+	}
+	if (!found_normal)
+		return -ENODEV;
+
+apply:
+	atomic64_set(&cuttlefish_normal_wmark_low_high_kbytes,
+		((u64)targets[1] << 32) | targets[0]);
+	setup_per_zone_wmarks();
 	return 0;
 }
 
@@ -6740,6 +6906,13 @@ static const struct ctl_table page_alloc_sysctl_table[] = {
 		.proc_handler	= watermark_scale_factor_sysctl_handler,
 		.extra1		= SYSCTL_ONE,
 		.extra2		= SYSCTL_THREE_THOUSAND,
+	},
+	{
+		.procname	= "cuttlefish_normal_wmark_low_high_kbytes",
+		.data		= &cuttlefish_normal_wmark_low_high_kbytes,
+		.maxlen		= sizeof(unsigned long) * 2,
+		.mode		= 0644,
+		.proc_handler	= cuttlefish_normal_wmark_sysctl_handler,
 	},
 	{
 		.procname	= "defrag_mode",
@@ -6963,12 +7136,15 @@ int alloc_contig_range_noprof(unsigned long start, unsigned long end,
 {
 	const unsigned int order = ilog2(end - start);
 	unsigned long outer_start, outer_end;
+	struct zone *zone = page_zone(pfn_to_page(start));
+	bool trace_enabled = trace_mm_alloc_contig_range_enabled();
+	u64 trace_start_ns = 0;
 	int ret = 0;
 
 	struct compact_control cc = {
 		.nr_migratepages = 0,
 		.order = -1,
-		.zone = page_zone(pfn_to_page(start)),
+		.zone = zone,
 		/*
 		 * Use MIGRATE_ASYNC for __GFP_NORETRY requests as it never
 		 * blocks.
@@ -6979,6 +7155,8 @@ int alloc_contig_range_noprof(unsigned long start, unsigned long end,
 		.alloc_contig = true,
 	};
 	INIT_LIST_HEAD(&cc.migratepages);
+	if (trace_enabled)
+		trace_start_ns = ktime_get_mono_fast_ns();
 	enum pb_isolate_mode mode = (alloc_flags & ACR_FLAGS_CMA) ?
 					    PB_ISOLATE_MODE_CMA_ALLOC :
 					    PB_ISOLATE_MODE_OTHER;
@@ -6988,12 +7166,16 @@ int alloc_contig_range_noprof(unsigned long start, unsigned long end,
 	 * MAX_PAGE_ORDER, so we must manually make sure that we are not
 	 * exceeding the maximum folio order.
 	 */
-	if (WARN_ON_ONCE((gfp_mask & __GFP_COMP) && order > MAX_FOLIO_ORDER))
-		return -EINVAL;
+	if (WARN_ON_ONCE((gfp_mask & __GFP_COMP) && order > MAX_FOLIO_ORDER)) {
+		ret = -EINVAL;
+		goto trace_out;
+	}
 
 	gfp_mask = current_gfp_context(gfp_mask);
-	if (__alloc_contig_verify_gfp_mask(gfp_mask, (gfp_t *)&cc.gfp_mask))
-		return -EINVAL;
+	if (__alloc_contig_verify_gfp_mask(gfp_mask, (gfp_t *)&cc.gfp_mask)) {
+		ret = -EINVAL;
+		goto trace_out;
+	}
 
 	/*
 	 * What we do here is we mark all pageblocks in range as
@@ -7099,6 +7281,14 @@ int alloc_contig_range_noprof(unsigned long start, unsigned long end,
 	}
 done:
 	undo_isolate_page_range(start, end);
+
+trace_out:
+	if (trace_enabled)
+		trace_mm_alloc_contig_range(trace_start_ns, ktime_get_mono_fast_ns(),
+						    start, end,
+						    (__force unsigned int)alloc_flags,
+						    gfp_mask, zone->zone_pgdat->node_id,
+						    zone_idx(zone), ret);
 	return ret;
 }
 EXPORT_SYMBOL(alloc_contig_range_noprof);
@@ -7666,7 +7856,7 @@ struct page *alloc_frozen_pages_nolock_noprof(gfp_t gfp_flags, int nid, unsigned
 	if (nid == NUMA_NO_NODE)
 		nid = numa_node_id();
 
-	prepare_alloc_pages(alloc_gfp, order, nid, NULL, &ac,
+	prepare_alloc_pages(&alloc_gfp, order, nid, NULL, &ac,
 			    &alloc_gfp, &alloc_flags);
 
 	/*
