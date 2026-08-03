@@ -7271,9 +7271,11 @@ static bool pgdat_balanced(pg_data_t *pgdat, int order, int highest_zoneidx,
 		unsigned long free_pages;
 		unsigned long free_order2;
 
-		if (order == 0 && zone_idx(zone) != ZONE_DMA32)
+		if (order0_order2_zone_isolation_enabled() &&
+		    order == 0 && zone_idx(zone) != ZONE_DMA32)
 			continue;
-		if (order >= 2 && zone_idx(zone) != ZONE_NORMAL)
+		if (order0_order2_zone_isolation_enabled() &&
+		    order >= 2 && zone_idx(zone) != ZONE_NORMAL)
 			continue;
 
 		if (sysctl_numa_balancing_mode & NUMA_BALANCING_MEMORY_TIERING)
