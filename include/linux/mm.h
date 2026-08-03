@@ -5,6 +5,7 @@
 #include <linux/errno.h>
 #include <linux/mmdebug.h>
 #include <linux/gfp.h>
+#include <linux/order0_provenance.h>
 #include <linux/pgalloc_tag.h>
 #include <linux/bug.h>
 #include <linux/list.h>
@@ -2986,6 +2987,9 @@ static inline struct ptdesc *pagetable_alloc_noprof(gfp_t gfp, unsigned int orde
 {
 	struct page *page = alloc_pages_noprof(gfp | __GFP_COMP, order);
 
+	if (page && !order)
+		order0_provenance_record_root(page_folio(page),
+					      ORDER0_SOURCE_PGTABLE);
 	return page_ptdesc(page);
 }
 #define pagetable_alloc(...)	alloc_hooks(pagetable_alloc_noprof(__VA_ARGS__))

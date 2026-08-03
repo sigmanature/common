@@ -39,6 +39,7 @@
 #include <linux/compat.h>
 #include <linux/pgalloc_tag.h>
 #include <linux/pagewalk.h>
+#include <linux/order0_provenance.h>
 
 #include <asm/tlb.h>
 #include <asm/pgalloc.h>
@@ -1280,7 +1281,7 @@ static vm_fault_t __do_huge_pmd_anonymous_page(struct vm_fault *vmf)
 		map_anon_folio_pmd(folio, vmf->pmd, vma, haddr);
 		mm_inc_nr_ptes(vma->vm_mm);
 		this_cpu_inc(deferred_split_reason_counts[DSR_ZAP]);
-		deferred_split_folio(folio, false, DSR_ZAP, vma);
+		deferred_split_folio(folio, false);
 		spin_unlock(vmf->ptl);
 	}
 
@@ -4055,8 +4056,7 @@ bool __folio_unqueue_deferred_split(struct folio *folio)
 }
 
 /* partially_mapped=false won't clear PG_partially_mapped folio flag */
-void deferred_split_folio(struct folio *folio, bool partially_mapped,
-			  unsigned int reason, struct vm_area_struct *vma)
+void deferred_split_folio(struct folio *folio, bool partially_mapped)
 {
 	struct deferred_split *ds_queue = get_deferred_split_queue(folio);
 #ifdef CONFIG_MEMCG
@@ -4101,7 +4101,7 @@ void deferred_split_folio(struct folio *folio, bool partially_mapped,
 	if (list_empty(&folio->_deferred_list)) {
 		list_add_tail(&folio->_deferred_list, &ds_queue->split_queue);
 		ds_queue->split_queue_len++;
-		trace_mm_folio_deferred_split(folio, reason, vma);
+		trace_mm_folio_deferred_split(folio, 0);
 #ifdef CONFIG_MEMCG
 		if (memcg)
 			set_shrinker_bit(memcg, folio_nid(folio),
@@ -4190,8 +4190,10 @@ static unsigned long deferred_split_scan(struct shrinker *shrink,
 	list_for_each_entry_safe(folio, next, &list, _deferred_list) {
 		bool did_split = false;
 		bool underused = false;
+		bool partially_mapped;
 
-		if (!folio_test_partially_mapped(folio)) {
+		partially_mapped = folio_test_partially_mapped(folio);
+		if (!partially_mapped) {
 			/*
 			 * See try_to_map_unused_to_zeropage(): we cannot
 			 * optimize zero-filled pages after splitting an
@@ -4208,6 +4210,8 @@ static unsigned long deferred_split_scan(struct shrinker *shrink,
 		this_cpu_write(folio_split_reason, FSR_DEFERRED);
 		if (!split_folio_to_list(folio, NULL)) {
 			did_split = true;
+			if (partially_mapped)
+				order0_provenance_note_partial_unmap_split();
 			if (underused)
 				count_vm_event(THP_UNDERUSED_SPLIT_PAGE);
 			split++;

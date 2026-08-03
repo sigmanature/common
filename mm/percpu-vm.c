@@ -95,6 +95,8 @@ static int pcpu_alloc_pages(struct pcpu_chunk *chunk,
 			*pagep = alloc_pages_node(cpu_to_node(cpu), gfp, 0);
 			if (!*pagep)
 				goto err;
+			order0_provenance_record_root(page_folio(*pagep),
+						      ORDER0_SOURCE_PERCPU_BUFFER);
 		}
 	}
 	return 0;

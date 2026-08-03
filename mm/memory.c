@@ -41,6 +41,7 @@
 
 #include <linux/kernel_stat.h>
 #include <linux/mm.h>
+#include <linux/order0_provenance.h>
 #include <linux/mm_inline.h>
 #include <linux/sched/mm.h>
 #include <linux/sched/numa_balancing.h>
@@ -3682,6 +3683,8 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 	new_folio = folio_prealloc(mm, vma, vmf->address, pfn_is_zero);
 	if (!new_folio)
 		goto oom;
+	order0_provenance_record_cow(new_folio, old_folio,
+				     ORDER0_SOURCE_WP_COW);
 
 	if (!pfn_is_zero) {
 		int err;
@@ -3924,6 +3927,7 @@ static vm_fault_t wp_page_copy_mthp(struct vm_fault *vmf,
 		return VM_FAULT_FALLBACK;
 	if (cow_end <= cow_addr || cow_addr < vma->vm_start ||
 	    cow_end > vma->vm_end) {
+		order0_provenance_note_cow_mthp_vma_span_fallback();
 		orders = thp_vma_allowable_orders(vma, vma->vm_flags, TVA_PAGEFAULT,
 						  BIT(order));
 
@@ -4005,6 +4009,9 @@ static vm_fault_t wp_page_copy_mthp(struct vm_fault *vmf,
 			update_mmu_cache_range(vmf, vma, cow_addr, pte, nr_pages);
 			folio_remove_rmap_ptes(old_folio, folio_page(old_folio, 0),
 					       nr_pages, vma);
+			order0_provenance_record_cow(new_folio, old_folio,
+						     ORDER0_SOURCE_WP_COW);
+			order0_provenance_note_cow_mthp_success();
 			new_folio = NULL;
 			page_copied = true;
 		} else {
@@ -4384,6 +4391,8 @@ static vm_fault_t do_wp_page(struct vm_fault *vmf)
 	if (folio && folio_test_ksm(folio))
 		count_vm_event(COW_KSM);
 #endif
+	if (cow_mthp_fallback)
+		order0_provenance_note_cow_mthp_fallback();
 	ret = wp_page_copy(vmf);
 
 	return ret;
@@ -4798,8 +4807,11 @@ static struct folio *alloc_swap_folio(struct vm_fault *vmf)
 		folio = vma_alloc_folio(gfp, order, vma, addr);
 		if (folio) {
 			if (!mem_cgroup_swapin_charge_folio(folio, vma->vm_mm,
-							    gfp, entry))
+							    gfp, entry)) {
+				order0_provenance_record_root(folio,
+							      ORDER0_SOURCE_SWAPIN);
 				return folio;
+			}
 			count_mthp_stat(order, MTHP_STAT_SWPIN_FALLBACK_CHARGE);
 			folio_put(folio);
 		}
@@ -4808,12 +4820,19 @@ static struct folio *alloc_swap_folio(struct vm_fault *vmf)
 	}
 
 fallback:
-	return __alloc_swap_folio(vmf);
+	folio = __alloc_swap_folio(vmf);
+	if (folio)
+		order0_provenance_record_root(folio, ORDER0_SOURCE_SWAPIN);
+	return folio;
 }
 #else /* !CONFIG_TRANSPARENT_HUGEPAGE */
 static struct folio *alloc_swap_folio(struct vm_fault *vmf)
 {
-	return __alloc_swap_folio(vmf);
+	struct folio *folio = __alloc_swap_folio(vmf);
+
+	if (folio)
+		order0_provenance_record_root(folio, ORDER0_SOURCE_SWAPIN);
+	return folio;
 }
 #endif /* CONFIG_TRANSPARENT_HUGEPAGE */
 
@@ -5435,6 +5454,8 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 		return 0;
 	if (!folio)
 		goto oom;
+	order0_provenance_record_root(folio,
+				      ORDER0_SOURCE_ANON_FIRST_FAULT);
 
 	nr_pages = folio_nr_pages(folio);
 	addr = ALIGN_DOWN(vmf->address, nr_pages * PAGE_SIZE);
@@ -5990,6 +6011,7 @@ static vm_fault_t do_cow_fault(struct vm_fault *vmf)
 	folio = folio_prealloc(vma->vm_mm, vma, vmf->address, false);
 	if (!folio)
 		return VM_FAULT_OOM;
+	order0_provenance_record_root(folio, ORDER0_SOURCE_COW_FAULT);
 
 	vmf->cow_page = &folio->page;
 
@@ -5998,6 +6020,8 @@ static vm_fault_t do_cow_fault(struct vm_fault *vmf)
 		goto uncharge_out;
 	if (ret & VM_FAULT_DONE_COW)
 		return ret;
+	order0_provenance_inherit_root(folio, page_folio(vmf->page),
+				       ORDER0_SOURCE_COW_FAULT);
 
 	if (copy_mc_user_highpage(vmf->cow_page, vmf->page, vmf->address, vma)) {
 		ret = VM_FAULT_HWPOISON;

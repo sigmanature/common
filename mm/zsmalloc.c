@@ -30,6 +30,7 @@
 #include <linux/highmem.h>
 #include <linux/string.h>
 #include <linux/slab.h>
+#include <linux/order0_provenance.h>
 #include <linux/spinlock.h>
 #include <linux/sprintf.h>
 #include <linux/shrinker.h>
@@ -38,7 +39,6 @@
 #include <linux/zsmalloc.h>
 #include <linux/fs.h>
 #include <linux/workqueue.h>
-#include <linux/mthp_alloc_counter.h>
 #include "zpdesc.h"
 
 #define ZSPAGE_MAGIC	0x58
@@ -259,8 +259,6 @@ static inline void zpdesc_dec_zone_page_state(struct zpdesc *zpdesc)
 static inline struct zpdesc *alloc_zpdesc(gfp_t gfp, const int nid)
 {
 	struct page *page = alloc_pages_node(nid, gfp, 0);
-	if (page)
-		mthp_count_zsmalloc_order(0);
 
 	return page_zpdesc(page);
 }
@@ -1049,10 +1047,8 @@ static struct zspage *alloc_zspage(struct zs_pool *pool,
 			struct page *page;
 
 			gfp &= ~__GFP_MOVABLE;
-				page = alloc_pages_node(nid, gfp | __GFP_COMP, order);
-				if (page)
-					mthp_count_zsmalloc_order(order);
-				zpdesc = page ? page_zpdesc(page) : NULL;
+			page = alloc_pages_node(nid, gfp | __GFP_COMP, order);
+			zpdesc = page ? page_zpdesc(page) : NULL;
 		} else {
 			zpdesc = alloc_zpdesc(gfp, nid);
 		}
@@ -1068,6 +1064,9 @@ static struct zspage *alloc_zspage(struct zs_pool *pool,
 			return NULL;
 		}
 		__zpdesc_set_zsmalloc(zpdesc);
+		if (!order)
+			order0_provenance_record_root(page_folio(zpdesc_page(zpdesc)),
+						      ORDER0_SOURCE_ZSMALLOC);
 
 		zpdesc_inc_zone_page_state(zpdesc);
 		zpdescs[i] = zpdesc;

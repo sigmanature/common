@@ -5,11 +5,11 @@
 #include <linux/mm_types.h>
 #include <linux/mm_inline.h>
 #include <linux/pagemap.h>
-#include <linux/mthp_alloc_counter.h>
 #include <linux/rcupdate.h>
 #include <linux/smp.h>
 #include <linux/swap.h>
 #include <linux/rmap.h>
+#include <linux/order0_provenance.h>
 
 #include <asm/pgalloc.h>
 #include <asm/tlb.h>
@@ -36,7 +36,8 @@ static bool tlb_next_batch(struct mmu_gather *tlb)
 	batch = (void *)__get_free_page(GFP_NOWAIT);
 	if (!batch)
 		return false;
-	mthp_count_residual_order0(MTHP_RESIDUAL_ORDER0_TLB_GATHER_BATCH);
+	order0_provenance_record_root(page_folio(virt_to_page(batch)),
+				      ORDER0_SOURCE_TLB_GATHER);
 
 	tlb->batch_count++;
 	batch->next = NULL;
@@ -372,7 +373,8 @@ void tlb_remove_table(struct mmu_gather *tlb, void *table)
 			tlb_remove_table_one(table);
 			return;
 		}
-		mthp_count_residual_order0(MTHP_RESIDUAL_ORDER0_TLB_TABLE_BATCH);
+		order0_provenance_record_root(page_folio(virt_to_page(*batch)),
+					      ORDER0_SOURCE_TLB_GATHER);
 		(*batch)->nr = 0;
 	}
 
