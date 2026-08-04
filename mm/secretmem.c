@@ -17,6 +17,7 @@
 #include <linux/pseudo_fs.h>
 #include <linux/secretmem.h>
 #include <linux/set_memory.h>
+#include <linux/order0_provenance.h>
 #include <linux/sched/signal.h>
 
 #include <uapi/linux/magic.h>
@@ -71,6 +72,7 @@ retry:
 			ret = VM_FAULT_OOM;
 			goto out;
 		}
+		order0_provenance_record_root(folio, ORDER0_SOURCE_SECRETMEM);
 
 		err = set_direct_map_invalid_noflush(folio_page(folio, 0));
 		if (err) {
