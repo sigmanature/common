@@ -34,6 +34,8 @@ enum order0_cow_path {
 
 enum order0_cow_parent_reason {
 	ORDER0_COW_PARENT_NO_FOLIO,
+	ORDER0_COW_PARENT_ZERO_PAGE,
+	ORDER0_COW_PARENT_SPECIAL_PTE,
 	ORDER0_COW_PARENT_NO_PAGE_EXT,
 	ORDER0_COW_PARENT_ROOT_UNKNOWN,
 	ORDER0_COW_PARENT_ROOT_INVALID,
@@ -100,6 +102,7 @@ static const char * const order0_source_names[ORDER0_SOURCE_NR] = {
 	[ORDER0_SOURCE_KSM] = "ksm",
 	[ORDER0_SOURCE_MEMPOOL] = "mempool",
 	[ORDER0_SOURCE_BALLOON] = "balloon",
+	[ORDER0_SOURCE_ZERO_PAGE] = "zero_page",
 };
 
 static const char * const order0_pcp_flow_names[ORDER0_PCP_FLOW_NR] = {
@@ -117,6 +120,8 @@ static const char * const order0_cow_path_names[ORDER0_COW_PATH_NR] = {
 static const char * const order0_cow_parent_reason_names[
 		ORDER0_COW_PARENT_REASON_NR] = {
 	[ORDER0_COW_PARENT_NO_FOLIO] = "no_folio",
+	[ORDER0_COW_PARENT_ZERO_PAGE] = "zero_page",
+	[ORDER0_COW_PARENT_SPECIAL_PTE] = "special_pte",
 	[ORDER0_COW_PARENT_NO_PAGE_EXT] = "no_page_ext",
 	[ORDER0_COW_PARENT_ROOT_UNKNOWN] = "root_unknown",
 	[ORDER0_COW_PARENT_ROOT_INVALID] = "root_invalid",
@@ -345,8 +350,9 @@ void order0_provenance_propagate_split(struct folio *new_folio,
 EXPORT_SYMBOL_GPL(order0_provenance_propagate_split);
 
 void order0_provenance_record_cow(struct folio *new_folio,
-				  const struct folio *old_folio,
-				  enum order0_alloc_source fallback_source)
+					const struct folio *old_folio,
+					enum order0_alloc_source fallback_source,
+					enum order0_cow_parent_hint parent_hint)
 {
 	struct page_ext *old_page_ext = NULL;
 	struct page_ext *new_page_ext = NULL;
@@ -371,7 +377,14 @@ void order0_provenance_record_cow(struct folio *new_folio,
 		parent_cow_depth = old_provenance->cow_depth;
 		cow_depth = min_t(u8, parent_cow_depth + 1, 3);
 	}
-	if (!old_folio)
+	if (!old_folio && parent_hint == ORDER0_COW_PARENT_HINT_ZERO_PAGE) {
+		parent_reason = ORDER0_COW_PARENT_ZERO_PAGE;
+		parent_root_source = ORDER0_SOURCE_ZERO_PAGE;
+		root_source = ORDER0_SOURCE_ZERO_PAGE;
+	} else if (!old_folio &&
+		   parent_hint == ORDER0_COW_PARENT_HINT_SPECIAL_PTE) {
+		parent_reason = ORDER0_COW_PARENT_SPECIAL_PTE;
+	} else if (!old_folio)
 		parent_reason = ORDER0_COW_PARENT_NO_FOLIO;
 	else if (!old_provenance)
 		parent_reason = ORDER0_COW_PARENT_NO_PAGE_EXT;

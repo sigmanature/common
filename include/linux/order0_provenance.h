@@ -38,7 +38,14 @@ enum order0_alloc_source {
 	ORDER0_SOURCE_KSM,
 	ORDER0_SOURCE_MEMPOOL,
 	ORDER0_SOURCE_BALLOON,
+	ORDER0_SOURCE_ZERO_PAGE,
 	ORDER0_SOURCE_NR,
+};
+
+enum order0_cow_parent_hint {
+	ORDER0_COW_PARENT_HINT_NONE,
+	ORDER0_COW_PARENT_HINT_ZERO_PAGE,
+	ORDER0_COW_PARENT_HINT_SPECIAL_PTE,
 };
 
 #ifdef CONFIG_MTHP_ORDER0_PROVENANCE
@@ -53,7 +60,8 @@ void order0_provenance_propagate_split(struct folio *new_folio,
 					       const struct folio *old_folio);
 void order0_provenance_record_cow(struct folio *new_folio,
 				   const struct folio *old_folio,
-				   enum order0_alloc_source fallback_source);
+				   enum order0_alloc_source fallback_source,
+				   enum order0_cow_parent_hint parent_hint);
 void order0_provenance_inherit_root(struct folio *new_folio,
 				    const struct folio *old_folio,
 				    enum order0_alloc_source fallback_source);
@@ -96,8 +104,9 @@ order0_provenance_propagate_split(struct folio *new_folio,
 }
 
 static inline void order0_provenance_record_cow(struct folio *new_folio,
-					  const struct folio *old_folio,
-					  enum order0_alloc_source fallback_source)
+						const struct folio *old_folio,
+						enum order0_alloc_source fallback_source,
+						enum order0_cow_parent_hint parent_hint)
 {
 }
 

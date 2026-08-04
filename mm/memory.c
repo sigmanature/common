@@ -3670,6 +3670,8 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 	struct mmu_notifier_range range;
 	vm_fault_t ret;
 	bool pfn_is_zero;
+	enum order0_cow_parent_hint parent_hint =
+		ORDER0_COW_PARENT_HINT_NONE;
 
 	delayacct_wpcopy_start();
 
@@ -3680,11 +3682,14 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 		goto out;
 
 	pfn_is_zero = is_zero_pfn(pte_pfn(vmf->orig_pte));
+	if (!vmf->page)
+		parent_hint = pfn_is_zero ? ORDER0_COW_PARENT_HINT_ZERO_PAGE :
+			ORDER0_COW_PARENT_HINT_SPECIAL_PTE;
 	new_folio = folio_prealloc(mm, vma, vmf->address, pfn_is_zero);
 	if (!new_folio)
 		goto oom;
 	order0_provenance_record_cow(new_folio, old_folio,
-				     ORDER0_SOURCE_WP_COW);
+					     ORDER0_SOURCE_WP_COW, parent_hint);
 
 	if (!pfn_is_zero) {
 		int err;
@@ -4010,7 +4015,8 @@ static vm_fault_t wp_page_copy_mthp(struct vm_fault *vmf,
 			folio_remove_rmap_ptes(old_folio, folio_page(old_folio, 0),
 					       nr_pages, vma);
 			order0_provenance_record_cow(new_folio, old_folio,
-						     ORDER0_SOURCE_WP_COW);
+					     ORDER0_SOURCE_WP_COW,
+					     ORDER0_COW_PARENT_HINT_NONE);
 			order0_provenance_note_cow_mthp_success();
 			new_folio = NULL;
 			page_copied = true;
