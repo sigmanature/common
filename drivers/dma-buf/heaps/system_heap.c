@@ -19,7 +19,7 @@
 #include <linux/iommu.h>
 #include <linux/mm.h>
 #include <linux/module.h>
-#include <linux/mthp_alloc_counter.h>
+#include <linux/order0_provenance.h>
 #include <linux/printk.h>
 #include <linux/scatterlist.h>
 #include <linux/swiotlb.h>
@@ -46,21 +46,18 @@ struct dma_heap_attachment {
 	bool uncached;
 };
 
-#define LOW_ORDER_GFP (GFP_HIGHUSER | __GFP_ZERO | __GFP_COMP)
+#define LOW_ORDER_GFP (GFP_HIGHUSER | __GFP_ZERO)
 #define HIGH_ORDER_GFP  (((GFP_HIGHUSER | __GFP_ZERO | __GFP_NOWARN \
 				| __GFP_NORETRY) & ~__GFP_RECLAIM) \
 				| __GFP_COMP)
-static gfp_t order_flags[] = {HIGH_ORDER_GFP, HIGH_ORDER_GFP, HIGH_ORDER_GFP,
-			      HIGH_ORDER_GFP, HIGH_ORDER_GFP, HIGH_ORDER_GFP,
-			      LOW_ORDER_GFP};
+static gfp_t order_flags[] = {HIGH_ORDER_GFP, HIGH_ORDER_GFP, LOW_ORDER_GFP};
 /*
- * The selection of the orders used for allocation (2MB, 1MB, 64K, 32K, 16K,
- * 8K, 4K) is designed to match with the sizes often found in IOMMUs. Using
- * high order pages instead of order 0 pages can significantly improve the
- * performance of many IOMMUs by reducing TLB pressure and time spent updating
- * page tables.
+ * The selection of the orders used for allocation (1MB, 64K, 4K) is designed
+ * to match with the sizes often found in IOMMUs. Using order 4 pages instead
+ * of order 0 pages can significantly improve the performance of many IOMMUs
+ * by reducing TLB pressure and time spent updating page tables.
  */
-static const unsigned int orders[] = {9, 8, 4, 3, 2, 1, 0};
+static const unsigned int orders[] = {8, 4, 0};
 #define NUM_ORDERS ARRAY_SIZE(orders)
 
 static bool needs_swiotlb_bounce(struct device *dev, struct sg_table *table)
@@ -373,7 +370,9 @@ static struct page *alloc_largest_available(unsigned long size,
 		page = alloc_pages(order_flags[i], orders[i]);
 		if (!page)
 			continue;
-		mthp_count_dmabuf_order(orders[i]);
+		if (!orders[i])
+			order0_provenance_record_root(page_folio(page),
+						      ORDER0_SOURCE_DMABUF_HEAP);
 		return page;
 	}
 	return NULL;
