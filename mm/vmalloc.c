@@ -43,7 +43,7 @@
 #include <asm/tlbflush.h>
 #include <asm/shmparam.h>
 #include <linux/page_owner.h>
-#include <linux/mthp_alloc_counter.h>
+#include <linux/order0_provenance.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/vmalloc.h>
@@ -3630,7 +3630,6 @@ vm_area_alloc_pages(gfp_t gfp, int nid,
 							pages + nr_allocated);
 
 			nr_allocated += nr;
-			mthp_count_residual_order0_pages(MTHP_RESIDUAL_ORDER0_VMALLOC, nr);
 
 			/*
 			 * If zero or pages were obtained partly,
@@ -3639,6 +3638,10 @@ vm_area_alloc_pages(gfp_t gfp, int nid,
 			if (nr != nr_pages_request)
 				break;
 		}
+
+		for (i = 0; i < nr_allocated; i++)
+			order0_provenance_record_root(page_folio(pages[i]),
+						      ORDER0_SOURCE_VMALLOC);
 	}
 
 	/* High-order pages or fallback path if "bulk" fails. */
@@ -3653,8 +3656,6 @@ vm_area_alloc_pages(gfp_t gfp, int nid,
 
 		if (unlikely(!page))
 			break;
-		if (!order)
-			mthp_count_residual_order0(MTHP_RESIDUAL_ORDER0_VMALLOC);
 
 		/*
 		 * High-order allocations must be able to be treated as
@@ -3665,6 +3666,10 @@ vm_area_alloc_pages(gfp_t gfp, int nid,
 		 */
 		if (order)
 			split_page(page, order);
+
+		if (!order)
+			order0_provenance_record_root(page_folio(page),
+						      ORDER0_SOURCE_VMALLOC);
 
 		/*
 		 * Careful, we allocate and map page-order pages, but
