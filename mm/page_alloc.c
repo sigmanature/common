@@ -859,8 +859,6 @@ static inline void __add_to_free_list(struct page *page, struct zone *zone,
 	else
 		list_add(&page->buddy_list, &area->free_list[migratetype]);
 	area->nr_free++;
-	WRITE_ONCE(area->mt_nr_free[migratetype],
-		area->mt_nr_free[migratetype] + 1);
 
 	if (order >= pageblock_order && !is_migrate_isolate(migratetype))
 		__mod_zone_page_state(zone, NR_FREE_PAGES_BLOCKS, nr_pages);
@@ -883,8 +881,6 @@ static inline void move_to_free_list(struct page *page, struct zone *zone,
 		     get_pageblock_migratetype(page), old_mt, nr_pages);
 
 	list_move_tail(&page->buddy_list, &area->free_list[new_mt]);
-	WRITE_ONCE(area->mt_nr_free[old_mt], area->mt_nr_free[old_mt] - 1);
-	WRITE_ONCE(area->mt_nr_free[new_mt], area->mt_nr_free[new_mt] + 1);
 
 	account_freepages(zone, -nr_pages, old_mt);
 	account_freepages(zone, nr_pages, new_mt);
@@ -900,7 +896,6 @@ static inline void move_to_free_list(struct page *page, struct zone *zone,
 static inline void __del_page_from_free_list(struct page *page, struct zone *zone,
 					     unsigned int order, int migratetype)
 {
-	struct free_area *area = &zone->free_area[order];
 	int nr_pages = 1 << order;
 
         VM_WARN_ONCE(get_pageblock_migratetype(page) != migratetype,
@@ -914,9 +909,7 @@ static inline void __del_page_from_free_list(struct page *page, struct zone *zon
 	list_del(&page->buddy_list);
 	__ClearPageBuddy(page);
 	set_page_private(page, 0);
-	area->nr_free--;
-	WRITE_ONCE(area->mt_nr_free[migratetype],
-		area->mt_nr_free[migratetype] - 1);
+	zone->free_area[order].nr_free--;
 
 	if (order >= pageblock_order && !is_migrate_isolate(migratetype))
 		__mod_zone_page_state(zone, NR_FREE_PAGES_BLOCKS, -nr_pages);
@@ -7074,6 +7067,9 @@ static void split_free_pages(struct list_head *list, gfp_t gfp_mask)
 			int i;
 
 			post_alloc_hook(page, order, gfp_mask);
+			if (!order)
+				order0_provenance_record_root(page_folio(page),
+						ORDER0_SOURCE_CMA_CONTIG);
 			set_page_refcounted(page);
 			if (!order)
 				continue;
