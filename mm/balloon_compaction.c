@@ -7,6 +7,7 @@
  * Copyright (C) 2012, Red Hat, Inc.  Rafael Aquini <aquini@redhat.com>
  */
 #include <linux/mm.h>
+#include <linux/order0_provenance.h>
 #include <linux/slab.h>
 #include <linux/export.h>
 #include <linux/balloon_compaction.h>
@@ -123,6 +124,9 @@ struct page *balloon_page_alloc(void)
 	struct page *page = alloc_page(balloon_mapping_gfp_mask() |
 				       __GFP_NOMEMALLOC | __GFP_NORETRY |
 				       __GFP_NOWARN);
+	if (page)
+		order0_provenance_record_root(page_folio(page),
+					      ORDER0_SOURCE_BALLOON);
 	return page;
 }
 EXPORT_SYMBOL_GPL(balloon_page_alloc);
