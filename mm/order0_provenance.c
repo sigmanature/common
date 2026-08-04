@@ -103,6 +103,10 @@ static const char * const order0_source_names[ORDER0_SOURCE_NR] = {
 	[ORDER0_SOURCE_MEMPOOL] = "mempool",
 	[ORDER0_SOURCE_BALLOON] = "balloon",
 	[ORDER0_SOURCE_ZERO_PAGE] = "zero_page",
+	[ORDER0_SOURCE_COMPACTION_CLEANUP] = "compaction_cleanup",
+	[ORDER0_SOURCE_EROFS_DECOMPRESS] = "erofs_decompress",
+	[ORDER0_SOURCE_ZRAM_TEMP] = "zram_temp",
+	[ORDER0_SOURCE_CMA_CONTIG] = "cma_contig",
 };
 
 static const char * const order0_pcp_flow_names[ORDER0_PCP_FLOW_NR] = {
