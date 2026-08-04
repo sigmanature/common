@@ -34,6 +34,7 @@
 #include <linux/security.h>
 #include <linux/gfp.h>
 #include <linux/net.h>
+#include <linux/order0_provenance.h>
 #include <linux/socket.h>
 #include <linux/sched/signal.h>
 
@@ -345,6 +346,9 @@ ssize_t copy_splice_read(struct file *in, loff_t *ppos,
 		kfree(bv);
 		return -ENOMEM;
 	}
+	for (i = 0; i < npages; i++)
+		order0_provenance_record_root(page_folio(pages[i]),
+					      ORDER0_SOURCE_SPLICE);
 
 	remain = len = min_t(size_t, len, npages * PAGE_SIZE);
 
