@@ -273,7 +273,7 @@ void order0_provenance_prepare_alloc(struct page *page, unsigned int order)
 }
 
 void order0_provenance_record_root(struct folio *folio,
-					 enum order0_alloc_source source)
+				   enum order0_alloc_source source)
 {
 	struct page_ext *page_ext = NULL;
 	struct order0_folio_provenance *provenance;
@@ -320,6 +320,27 @@ void order0_provenance_record_migration(struct folio *new_folio,
 	page_ext_put(new_page_ext);
 }
 EXPORT_SYMBOL_GPL(order0_provenance_record_migration);
+
+void order0_provenance_propagate_split(struct folio *new_folio,
+					       const struct folio *old_folio)
+{
+	struct page_ext *old_page_ext = NULL;
+	struct page_ext *new_page_ext = NULL;
+	struct order0_folio_provenance *old_provenance;
+	struct order0_folio_provenance *new_provenance;
+
+	old_provenance = order0_folio_provenance_get(old_folio, &old_page_ext);
+	new_provenance = order0_folio_provenance_get(new_folio, &new_page_ext);
+	if (old_provenance && new_provenance) {
+		new_provenance->root_source = old_provenance->root_source;
+		new_provenance->cow_depth = old_provenance->cow_depth;
+	}
+	if (old_page_ext)
+		page_ext_put(old_page_ext);
+	if (new_page_ext)
+		page_ext_put(new_page_ext);
+}
+EXPORT_SYMBOL_GPL(order0_provenance_propagate_split);
 
 void order0_provenance_record_cow(struct folio *new_folio,
 				  const struct folio *old_folio,
