@@ -34,6 +34,7 @@
 #include <linux/cpuhotplug.h>
 #include <linux/part_stat.h>
 #include <linux/kernel_read_file.h>
+#include <linux/order0_provenance.h>
 
 #include "zram_drv.h"
 #include "zram_ioctl.h"
@@ -740,6 +741,8 @@ int zram_writeback_slots(struct zram *zram, struct zram_pp_ctl *ctl)
 	page = alloc_page(GFP_KERNEL);
 	if (!page)
 		return -ENOMEM;
+	order0_provenance_record_root(page_folio(page),
+			ORDER0_SOURCE_ZRAM_TEMP);
 
 	while ((pps = select_pp_slot(ctl))) {
 		spin_lock(&zram->wb_limit_lock);
@@ -1808,6 +1811,8 @@ static int zram_bvec_read_partial(struct zram *zram, struct bio_vec *bvec,
 
 	if (!page)
 		return -ENOMEM;
+	order0_provenance_record_root(page_folio(page),
+			ORDER0_SOURCE_ZRAM_TEMP);
 	ret = zram_read_page(zram, page, index, NULL);
 	if (likely(!ret))
 		memcpy_to_bvec(bvec, page_address(page) + offset);
@@ -1990,6 +1995,8 @@ static int zram_bvec_write_partial(struct zram *zram, struct bio_vec *bvec,
 
 	if (!page)
 		return -ENOMEM;
+	order0_provenance_record_root(page_folio(page),
+			ORDER0_SOURCE_ZRAM_TEMP);
 
 	ret = zram_read_page(zram, page, index, bio);
 	if (!ret) {
@@ -2320,6 +2327,8 @@ static ssize_t recompress_store(struct device *dev,
 		ret = -ENOMEM;
 		goto release_init_lock;
 	}
+	order0_provenance_record_root(page_folio(page),
+			ORDER0_SOURCE_ZRAM_TEMP);
 
 	ctl = init_pp_ctl();
 	if (!ctl) {
