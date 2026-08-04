@@ -859,6 +859,8 @@ static inline void __add_to_free_list(struct page *page, struct zone *zone,
 	else
 		list_add(&page->buddy_list, &area->free_list[migratetype]);
 	area->nr_free++;
+	WRITE_ONCE(area->mt_nr_free[migratetype],
+		area->mt_nr_free[migratetype] + 1);
 
 	if (order >= pageblock_order && !is_migrate_isolate(migratetype))
 		__mod_zone_page_state(zone, NR_FREE_PAGES_BLOCKS, nr_pages);
@@ -881,6 +883,8 @@ static inline void move_to_free_list(struct page *page, struct zone *zone,
 		     get_pageblock_migratetype(page), old_mt, nr_pages);
 
 	list_move_tail(&page->buddy_list, &area->free_list[new_mt]);
+	WRITE_ONCE(area->mt_nr_free[old_mt], area->mt_nr_free[old_mt] - 1);
+	WRITE_ONCE(area->mt_nr_free[new_mt], area->mt_nr_free[new_mt] + 1);
 
 	account_freepages(zone, -nr_pages, old_mt);
 	account_freepages(zone, nr_pages, new_mt);
@@ -896,6 +900,7 @@ static inline void move_to_free_list(struct page *page, struct zone *zone,
 static inline void __del_page_from_free_list(struct page *page, struct zone *zone,
 					     unsigned int order, int migratetype)
 {
+	struct free_area *area = &zone->free_area[order];
 	int nr_pages = 1 << order;
 
         VM_WARN_ONCE(get_pageblock_migratetype(page) != migratetype,
@@ -909,7 +914,9 @@ static inline void __del_page_from_free_list(struct page *page, struct zone *zon
 	list_del(&page->buddy_list);
 	__ClearPageBuddy(page);
 	set_page_private(page, 0);
-	zone->free_area[order].nr_free--;
+	area->nr_free--;
+	WRITE_ONCE(area->mt_nr_free[migratetype],
+		area->mt_nr_free[migratetype] - 1);
 
 	if (order >= pageblock_order && !is_migrate_isolate(migratetype))
 		__mod_zone_page_state(zone, NR_FREE_PAGES_BLOCKS, -nr_pages);
@@ -1524,8 +1531,10 @@ static void free_pcppages_bulk(struct zone *zone, int count,
 			list_del(&page->pcp_list);
 			count -= nr_pages;
 			pcp->count -= nr_pages;
-			if (!order)
+			if (!order) {
+				pcp->order0_count--;
 				order0_provenance_pcp_drain(zone, mt, nr_pages);
+			}
 
 			__free_one_page(page, pfn, zone, order, mt, FPI_NONE);
 			trace_mm_page_pcpu_drain(page, order, mt);
@@ -2893,9 +2902,11 @@ static void free_frozen_page_commit(struct zone *zone,
 	pindex = order_to_pindex(migratetype, order);
 	list_add(&page->pcp_list, &pcp->lists[pindex]);
 	pcp->count += 1 << order;
-	if (!order)
+	if (!order) {
+		pcp->order0_count++;
 		order0_provenance_pcp_free(zone,
 			get_pfnblock_migratetype(page, page_to_pfn(page)), 1);
+	}
 
 	batch = READ_ONCE(pcp->batch);
 	/*
@@ -3338,6 +3349,8 @@ struct page *__rmqueue_pcplist(struct zone *zone, unsigned int order,
 			if (!order) {
 				struct page *pcp_page;
 
+				pcp->order0_count += alloced;
+
 				list_for_each_entry(pcp_page, list, pcp_list)
 					order0_provenance_pcp_refill(zone,
 						get_pfnblock_migratetype(pcp_page,
@@ -3350,9 +3363,11 @@ struct page *__rmqueue_pcplist(struct zone *zone, unsigned int order,
 		page = list_first_entry(list, struct page, pcp_list);
 		list_del(&page->pcp_list);
 		pcp->count -= 1 << order;
-		if (!order)
+		if (!order) {
+			pcp->order0_count--;
 			order0_provenance_pcp_alloc(zone,
 				get_pfnblock_migratetype(page, page_to_pfn(page)), 1);
+		}
 	} while (check_new_pages(page, order));
 
 	return page;

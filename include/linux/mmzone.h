@@ -138,6 +138,7 @@ extern int page_group_by_mobility_disabled;
 struct free_area {
 	struct list_head	free_list[MIGRATE_TYPES];
 	unsigned long		nr_free;
+	unsigned long		mt_nr_free[MIGRATE_TYPES];
 };
 
 struct pglist_data;
@@ -747,6 +748,7 @@ enum zone_watermarks {
 struct per_cpu_pages {
 	spinlock_t lock;	/* Protects lists field */
 	int count;		/* number of pages in the list */
+	int order0_count;	/* number of order-0 pages in the lists */
 	int high;		/* high watermark, emptying needed */
 	int high_min;		/* min high watermark */
 	int high_max;		/* max high watermark */
