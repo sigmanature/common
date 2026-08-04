@@ -89,6 +89,17 @@ static int __init order0_order2_zone_isolation_setup(char *str)
 early_param("order0_order2_zone_isolation",
 	    order0_order2_zone_isolation_setup);
 
+static inline void force_order_lt2_dma32(gfp_t *gfp_mask, unsigned int order)
+{
+	if (!order0_order2_zone_isolation_enabled() ||
+	    order >= 2 ||
+	    (*gfp_mask & (__GFP_DMA | __GFP_DMA32)))
+		return;
+
+	*gfp_mask &= ~__GFP_HIGHMEM;
+	*gfp_mask |= __GFP_DMA32;
+}
+
 /* Free Page Internal flags: for internal, non-pcp variants of free_pages(). */
 typedef int __bitwise fpi_t;
 
@@ -967,15 +978,6 @@ buddy_merge_likely(unsigned long pfn, unsigned long buddy_pfn,
  * -- nyc
  */
 
-static inline unsigned int zone_max_order(struct zone *zone)
-{
-	if (order0_order2_zone_isolation_enabled() &&
-	    zone_idx(zone) == ZONE_NORMAL)
-		return 2;
-
-	return MAX_PAGE_ORDER;
-}
-
 static inline void __free_one_page(struct page *page,
 		unsigned long pfn,
 		struct zone *zone, unsigned int order,
@@ -996,7 +998,7 @@ static inline void __free_one_page(struct page *page,
 
 	account_freepages(zone, 1 << order, migratetype);
 
-	while (order < zone_max_order(zone)) {
+	while (order < MAX_PAGE_ORDER) {
 		int buddy_mt = migratetype;
 
 		if (compaction_capture(capc, page, order, migratetype)) {
@@ -3851,12 +3853,6 @@ retry:
 		struct page *page;
 		unsigned long mark;
 
-		if (order0_order2_zone_isolation_enabled() &&
-		    (gfp_mask & __GFP_MOVABLE) &&
-		    ((order == 0 && zone_idx(zone) != ZONE_DMA32) ||
-		     (order >= 2 && zone_idx(zone) != ZONE_NORMAL)))
-			continue;
-
 		if (cpusets_enabled() &&
 			(alloc_flags & ALLOC_CPUSET) &&
 			!__cpuset_zone_allowed(zone, gfp_mask))
@@ -5091,15 +5087,21 @@ got_pg:
 	return page;
 }
 
-static inline bool prepare_alloc_pages(gfp_t gfp_mask, unsigned int order,
+static inline bool prepare_alloc_pages(gfp_t *gfp_mask, unsigned int order,
 		int preferred_nid, nodemask_t *nodemask,
 		struct alloc_context *ac, gfp_t *alloc_gfp,
 		unsigned int *alloc_flags)
 {
-	ac->highest_zoneidx = gfp_order_zone(gfp_mask, order);
-	ac->zonelist = node_zonelist(preferred_nid, gfp_mask);
+	gfp_t effective_gfp = *gfp_mask;
+
+	force_order_lt2_dma32(&effective_gfp, order);
+	*gfp_mask = effective_gfp;
+	force_order_lt2_dma32(alloc_gfp, order);
+
+	ac->highest_zoneidx = gfp_zone(effective_gfp);
+	ac->zonelist = node_zonelist(preferred_nid, effective_gfp);
 	ac->nodemask = nodemask;
-	ac->migratetype = gfp_migratetype(gfp_mask);
+	ac->migratetype = gfp_migratetype(effective_gfp);
 
 	if (cpusets_enabled()) {
 		*alloc_gfp |= __GFP_HARDWALL;
@@ -5113,20 +5115,20 @@ static inline bool prepare_alloc_pages(gfp_t gfp_mask, unsigned int order,
 			*alloc_flags |= ALLOC_CPUSET;
 	}
 
-	might_alloc(gfp_mask);
+	might_alloc(effective_gfp);
 
 	/*
 	 * Don't invoke should_fail logic, since it may call
 	 * get_random_u32() and printk() which need to spin_lock.
 	 */
 	if (!(*alloc_flags & ALLOC_TRYLOCK) &&
-	    should_fail_alloc_page(gfp_mask, order))
+	    should_fail_alloc_page(effective_gfp, order))
 		return false;
 
-	*alloc_flags = gfp_to_alloc_flags_cma(gfp_mask, *alloc_flags);
+	*alloc_flags = gfp_to_alloc_flags_cma(effective_gfp, *alloc_flags);
 
 	/* Dirty zone balancing only done in the fast path */
-	ac->spread_dirty_pages = (gfp_mask & __GFP_WRITE);
+	ac->spread_dirty_pages = (effective_gfp & __GFP_WRITE);
 
 	/*
 	 * The preferred zone is used for statistics but crucially it is
@@ -5208,7 +5210,8 @@ unsigned long alloc_pages_bulk_noprof(gfp_t gfp, int preferred_nid,
 	/* May set ALLOC_NOFRAGMENT, fragmentation will return 1 page. */
 	gfp &= gfp_allowed_mask;
 	alloc_gfp = gfp;
-	if (!prepare_alloc_pages(gfp, 0, preferred_nid, nodemask, &ac, &alloc_gfp, &alloc_flags))
+	if (!prepare_alloc_pages(&gfp, 0, preferred_nid, nodemask, &ac,
+				 &alloc_gfp, &alloc_flags))
 		goto out;
 	gfp = alloc_gfp;
 
@@ -5334,7 +5337,7 @@ struct page *__alloc_frozen_pages_noprof(gfp_t gfp, unsigned int order,
 	 */
 	gfp = current_gfp_context(gfp);
 	alloc_gfp = gfp;
-	if (!prepare_alloc_pages(gfp, order, preferred_nid, nodemask, &ac,
+	if (!prepare_alloc_pages(&gfp, order, preferred_nid, nodemask, &ac,
 			&alloc_gfp, &alloc_flags))
 		return NULL;
 
@@ -7849,7 +7852,7 @@ struct page *alloc_frozen_pages_nolock_noprof(gfp_t gfp_flags, int nid, unsigned
 	if (nid == NUMA_NO_NODE)
 		nid = numa_node_id();
 
-	prepare_alloc_pages(alloc_gfp, order, nid, NULL, &ac,
+	prepare_alloc_pages(&alloc_gfp, order, nid, NULL, &ac,
 			    &alloc_gfp, &alloc_flags);
 
 	/*

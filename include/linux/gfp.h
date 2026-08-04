@@ -168,34 +168,6 @@ static inline bool order0_order2_zone_isolation_enabled(void)
 	return static_branch_unlikely(&order0_order2_zone_isolation_key);
 }
 
-/**
- * gfp_order_zone - determine the target zone based on allocation order
- * @flags: gfp flags
- * @order: allocation order
- *
- * For movable allocations:
- *   order-0 -> ZONE_DMA32
- *   order-2 -> ZONE_NORMAL
- * Non-movable allocations follow normal gfp_zone() rules.
- */
-static inline enum zone_type gfp_order_zone(gfp_t flags, int order)
-{
-	enum zone_type z = gfp_zone(flags);
-
-	if (!order0_order2_zone_isolation_enabled())
-		return z;
-
-	if (!(flags & __GFP_MOVABLE))
-		return z;
-
-	if (order == 0)
-		return min_t(enum zone_type, z, ZONE_DMA32);
-	if (order >= 2)
-		return min_t(enum zone_type, z, ZONE_NORMAL);
-
-	return z;
-}
-
 /*
  * There is only one page-allocator function, and two main namespaces to
  * it. The alloc_page*() variants return 'struct page *' and as such
