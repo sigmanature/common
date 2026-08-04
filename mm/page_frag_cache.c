@@ -17,6 +17,7 @@
 #include <linux/gfp_types.h>
 #include <linux/init.h>
 #include <linux/mm.h>
+#include <linux/order0_provenance.h>
 #include <linux/page_frag_cache.h>
 #include "internal.h"
 
@@ -63,6 +64,9 @@ static struct page *__page_frag_cache_refill(struct page_frag_cache *nc,
 		page = __alloc_pages(gfp, 0, numa_mem_id(), NULL);
 		order = 0;
 	}
+	if (page && !order)
+		order0_provenance_record_root(page_folio(page),
+					      ORDER0_SOURCE_PAGE_FRAG);
 
 	nc->encoded_page = page ?
 		encoded_page_create(page, order, page_is_pfmemalloc(page)) : 0;

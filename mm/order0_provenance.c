@@ -92,6 +92,7 @@ static const char * const order0_source_names[ORDER0_SOURCE_NR] = {
 	[ORDER0_SOURCE_ZSMALLOC] = "zsmalloc",
 	[ORDER0_SOURCE_VMALLOC] = "vmalloc",
 	[ORDER0_SOURCE_DMABUF_HEAP] = "dmabuf_heap",
+	[ORDER0_SOURCE_PAGE_FRAG] = "page_frag",
 };
 
 static const char * const order0_pcp_flow_names[ORDER0_PCP_FLOW_NR] = {
