@@ -14,6 +14,7 @@
  */
 
 #include <linux/migrate.h>
+#include <linux/order0_provenance.h>
 #include <linux/export.h>
 #include <linux/swap.h>
 #include <linux/huge_mm.h>
@@ -2196,7 +2197,13 @@ struct folio *alloc_migration_target(struct folio *src, unsigned long private)
 	if (is_highmem_idx(zidx) || zidx == ZONE_MOVABLE)
 		gfp_mask |= __GFP_HIGHMEM;
 
-	return __folio_alloc(gfp_mask, order, nid, mtc->nmask);
+	{
+		struct folio *dst = __folio_alloc(gfp_mask, order, nid, mtc->nmask);
+
+		if (dst)
+			order0_provenance_record_migration(dst, src);
+		return dst;
+	}
 }
 
 #ifdef CONFIG_NUMA
