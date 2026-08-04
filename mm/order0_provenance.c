@@ -26,13 +26,33 @@ enum order0_pcp_flow {
 	ORDER0_PCP_FLOW_NR,
 };
 
+enum order0_cow_path {
+	ORDER0_COW_PATH_WP,
+	ORDER0_COW_PATH_FAULT,
+	ORDER0_COW_PATH_NR,
+};
+
+enum order0_cow_parent_reason {
+	ORDER0_COW_PARENT_NO_FOLIO,
+	ORDER0_COW_PARENT_NO_PAGE_EXT,
+	ORDER0_COW_PARENT_ROOT_UNKNOWN,
+	ORDER0_COW_PARENT_ROOT_INVALID,
+	ORDER0_COW_PARENT_FALLBACK_ROOT,
+	ORDER0_COW_PARENT_REAL_ROOT,
+	ORDER0_COW_PARENT_REASON_NR,
+};
+
 enum order0_counter {
 	ORDER0_COUNTER_TOTAL_BASE,
 	ORDER0_COUNTER_SOURCE_BASE = ORDER0_COUNTER_TOTAL_BASE + ORDER0_MT_NR,
 	ORDER0_COUNTER_COW_PARENT_ROOT_BASE = ORDER0_COUNTER_SOURCE_BASE +
 		(ORDER0_SOURCE_NR - 1) * ORDER0_MT_NR,
-	ORDER0_COUNTER_COW_MTHP_SUCCESS = ORDER0_COUNTER_COW_PARENT_ROOT_BASE +
+	ORDER0_COUNTER_COW_PARENT_DIAG_BASE =
+		ORDER0_COUNTER_COW_PARENT_ROOT_BASE +
 		ORDER0_SOURCE_NR * ORDER0_MT_NR,
+	ORDER0_COUNTER_COW_MTHP_SUCCESS =
+		ORDER0_COUNTER_COW_PARENT_DIAG_BASE +
+		ORDER0_COW_PATH_NR * ORDER0_COW_PARENT_REASON_NR,
 	ORDER0_COUNTER_COW_MTHP_FALLBACK,
 	ORDER0_COUNTER_COW_MTHP_VMA_SPAN_FALLBACK,
 	ORDER0_COUNTER_COW_CHAIN_DEPTH_0,
@@ -70,6 +90,8 @@ static const char * const order0_source_names[ORDER0_SOURCE_NR] = {
 	[ORDER0_SOURCE_PIPE_BUFFER] = "pipe_buffer",
 	[ORDER0_SOURCE_SLAB] = "slab",
 	[ORDER0_SOURCE_ZSMALLOC] = "zsmalloc",
+	[ORDER0_SOURCE_VMALLOC] = "vmalloc",
+	[ORDER0_SOURCE_DMABUF_HEAP] = "dmabuf_heap",
 };
 
 static const char * const order0_pcp_flow_names[ORDER0_PCP_FLOW_NR] = {
@@ -77,6 +99,21 @@ static const char * const order0_pcp_flow_names[ORDER0_PCP_FLOW_NR] = {
 	[ORDER0_PCP_FREE] = "free",
 	[ORDER0_PCP_ALLOC] = "alloc",
 	[ORDER0_PCP_DRAIN] = "drain",
+};
+
+static const char * const order0_cow_path_names[ORDER0_COW_PATH_NR] = {
+	[ORDER0_COW_PATH_WP] = "wp",
+	[ORDER0_COW_PATH_FAULT] = "fault",
+};
+
+static const char * const order0_cow_parent_reason_names[
+		ORDER0_COW_PARENT_REASON_NR] = {
+	[ORDER0_COW_PARENT_NO_FOLIO] = "no_folio",
+	[ORDER0_COW_PARENT_NO_PAGE_EXT] = "no_page_ext",
+	[ORDER0_COW_PARENT_ROOT_UNKNOWN] = "root_unknown",
+	[ORDER0_COW_PARENT_ROOT_INVALID] = "root_invalid",
+	[ORDER0_COW_PARENT_FALLBACK_ROOT] = "fallback_root",
+	[ORDER0_COW_PARENT_REAL_ROOT] = "real_root",
 };
 
 static const enum zone_stat_item order0_pcp_zone_items[ORDER0_MT_NR] = {
@@ -141,6 +178,14 @@ order0_cow_parent_root_counter(enum order0_alloc_source source,
 }
 
 static inline enum order0_counter
+order0_cow_parent_diag_counter(enum order0_cow_path path,
+				       enum order0_cow_parent_reason reason)
+{
+	return ORDER0_COUNTER_COW_PARENT_DIAG_BASE +
+		path * ORDER0_COW_PARENT_REASON_NR + reason;
+}
+
+static inline enum order0_counter
 order0_pcp_counter(enum order0_pcp_flow flow,
 			   enum order0_migratetype_bucket bucket)
 {
@@ -195,6 +240,16 @@ static void order0_count_cow_parent_root(const struct folio *folio,
 	order0_counter_inc(order0_cow_parent_root_counter(source, bucket));
 }
 
+static void order0_count_cow_parent_diagnostic(
+		const struct folio *folio, enum order0_cow_path path,
+		enum order0_cow_parent_reason reason)
+{
+	if (folio_order(folio) || path >= ORDER0_COW_PATH_NR ||
+	    reason >= ORDER0_COW_PARENT_REASON_NR)
+		return;
+	order0_counter_inc(order0_cow_parent_diag_counter(path, reason));
+}
+
 void order0_provenance_prepare_alloc(struct page *page, unsigned int order)
 {
 	struct page_ext *page_ext = NULL;
@@ -239,6 +294,7 @@ void order0_provenance_record_cow(struct folio *new_folio,
 	struct order0_folio_provenance *new_provenance;
 	enum order0_alloc_source root_source = fallback_source;
 	enum order0_alloc_source parent_root_source = ORDER0_SOURCE_UNKNOWN;
+	enum order0_cow_parent_reason parent_reason;
 	u8 cow_depth = 1;
 	u8 parent_cow_depth = 0;
 
@@ -255,8 +311,24 @@ void order0_provenance_record_cow(struct folio *new_folio,
 		parent_cow_depth = old_provenance->cow_depth;
 		cow_depth = min_t(u8, parent_cow_depth + 1, 3);
 	}
+	if (!old_folio)
+		parent_reason = ORDER0_COW_PARENT_NO_FOLIO;
+	else if (!old_provenance)
+		parent_reason = ORDER0_COW_PARENT_NO_PAGE_EXT;
+	else if (old_provenance->root_source == ORDER0_SOURCE_UNKNOWN)
+		parent_reason = ORDER0_COW_PARENT_ROOT_UNKNOWN;
+	else if (old_provenance->root_source >= ORDER0_SOURCE_NR)
+		parent_reason = ORDER0_COW_PARENT_ROOT_INVALID;
+	else if (old_provenance->root_source == ORDER0_SOURCE_COW_FAULT ||
+		 old_provenance->root_source == ORDER0_SOURCE_WP_COW)
+		parent_reason = ORDER0_COW_PARENT_FALLBACK_ROOT;
+	else
+		parent_reason = ORDER0_COW_PARENT_REAL_ROOT;
 	if (old_page_ext)
 		page_ext_put(old_page_ext);
+	if (!folio_order(new_folio))
+		order0_count_cow_parent_diagnostic(new_folio,
+				ORDER0_COW_PATH_WP, parent_reason);
 	order0_count_cow_parent_root(new_folio, parent_root_source);
 
 	new_provenance = order0_folio_provenance_get(new_folio, &new_page_ext);
@@ -292,6 +364,8 @@ void order0_provenance_inherit_root(struct folio *new_folio,
 	struct order0_folio_provenance *old_provenance;
 	struct order0_folio_provenance *new_provenance;
 	enum order0_alloc_source root_source = fallback_source;
+	enum order0_alloc_source parent_root_source = ORDER0_SOURCE_UNKNOWN;
+	enum order0_cow_parent_reason parent_reason;
 	u8 cow_depth = 0;
 
 	if (root_source >= ORDER0_SOURCE_NR)
@@ -302,10 +376,33 @@ void order0_provenance_inherit_root(struct folio *new_folio,
 	    old_provenance->root_source > ORDER0_SOURCE_UNKNOWN &&
 	    old_provenance->root_source < ORDER0_SOURCE_NR) {
 		root_source = old_provenance->root_source;
+		parent_root_source = old_provenance->root_source;
 		cow_depth = old_provenance->cow_depth;
 	}
+	if (!old_folio)
+		parent_reason = ORDER0_COW_PARENT_NO_FOLIO;
+	else if (!old_provenance)
+		parent_reason = ORDER0_COW_PARENT_NO_PAGE_EXT;
+	else if (old_provenance->root_source == ORDER0_SOURCE_UNKNOWN)
+		parent_reason = ORDER0_COW_PARENT_ROOT_UNKNOWN;
+	else if (old_provenance->root_source >= ORDER0_SOURCE_NR)
+		parent_reason = ORDER0_COW_PARENT_ROOT_INVALID;
+	else if (old_provenance->root_source == ORDER0_SOURCE_COW_FAULT ||
+		 old_provenance->root_source == ORDER0_SOURCE_WP_COW)
+		parent_reason = ORDER0_COW_PARENT_FALLBACK_ROOT;
+	else
+		parent_reason = ORDER0_COW_PARENT_REAL_ROOT;
 	if (old_page_ext)
 		page_ext_put(old_page_ext);
+	if (!folio_order(new_folio))
+		order0_count_cow_parent_diagnostic(new_folio,
+				ORDER0_COW_PATH_FAULT, parent_reason);
+
+	/*
+	 * do_cow_fault inherits the parent's root into per-folio metadata;
+	 * keep the same parent-root birth aggregate the wp_cow path produces.
+	 */
+	order0_count_cow_parent_root(new_folio, parent_root_source);
 
 	new_provenance = order0_folio_provenance_get(new_folio, &new_page_ext);
 	if (new_provenance) {
@@ -372,6 +469,39 @@ void order0_provenance_pcp_drain(struct zone *zone, int migratetype,
 	order0_pcp_account(zone, migratetype, nr_pages, -nr_pages, ORDER0_PCP_DRAIN);
 }
 
+unsigned long order0_provenance_pcp_order0_node(struct pglist_data *pgdat)
+{
+	unsigned long total = 0;
+	int zoneid, cpu;
+
+	for (zoneid = 0; zoneid < MAX_NR_ZONES; zoneid++) {
+		struct zone *zone = &pgdat->node_zones[zoneid];
+
+		if (!populated_zone(zone))
+			continue;
+
+		for_each_possible_cpu(cpu) {
+			struct per_cpu_pages *pcp;
+
+			pcp = per_cpu_ptr(zone->per_cpu_pageset, cpu);
+			total += data_race(READ_ONCE(pcp->order0_count));
+		}
+	}
+
+	return total;
+}
+
+unsigned long order0_provenance_pcp_order0_total(void)
+{
+	unsigned long total = 0;
+	pg_data_t *pgdat;
+
+	for_each_online_pgdat(pgdat)
+		total += order0_provenance_pcp_order0_node(pgdat);
+
+	return total;
+}
+
 static unsigned long order0_counter_sum(enum order0_counter counter)
 {
 	unsigned long total = 0;
@@ -393,6 +523,8 @@ void order0_provenance_vmstat_show(struct seq_file *m)
 	int bucket;
 	int source;
 	int flow;
+	int path;
+	int reason;
 
 	for (bucket = 0; bucket < ORDER0_MT_NR; bucket++)
 		seq_printf(m, "order0_alloc_total_%s %lu\n",
@@ -409,8 +541,15 @@ void order0_provenance_vmstat_show(struct seq_file *m)
 			seq_printf(m, "order0_cow_parent_root_%s_%s %lu\n",
 				   order0_source_names[source],
 				   order0_migratetype_names[bucket],
-				   order0_counter_sum(order0_cow_parent_root_counter(
-					   source, bucket)));
+					   order0_counter_sum(order0_cow_parent_root_counter(
+						   source, bucket)));
+	for (path = 0; path < ORDER0_COW_PATH_NR; path++)
+		for (reason = 0; reason < ORDER0_COW_PARENT_REASON_NR; reason++)
+			seq_printf(m, "order0_cow_parent_%s_%s %lu\n",
+				   order0_cow_path_names[path],
+				   order0_cow_parent_reason_names[reason],
+				   order0_counter_sum(order0_cow_parent_diag_counter(
+					   path, reason)));
 	order0_vmstat_print(m, "order0_cow_mthp_success",
 			    ORDER0_COUNTER_COW_MTHP_SUCCESS);
 	order0_vmstat_print(m, "order0_cow_mthp_fallback",
