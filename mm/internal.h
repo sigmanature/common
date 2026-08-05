@@ -955,7 +955,7 @@ int find_suitable_fallback(struct free_area *area, unsigned int order,
 
 static inline bool free_area_empty(struct free_area *area, int migratetype)
 {
-	return list_empty(&area->free_list[migratetype]);
+	return !READ_ONCE(area->mt_nr_free[migratetype]);
 }
 
 /* mm/util.c */
@@ -1662,7 +1662,6 @@ int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm);
 #define KCOMPACTD_WAKE_REASON_ALLOC	0
 #define KCOMPACTD_WAKE_REASON_VMSCAN	1
 extern unsigned long kcompactd_wake_reasons_bitmap;
-extern unsigned long sysctl_compact_order2_threshold;
 extern unsigned long sysctl_compact_order2_alloc_wake;
 
 static inline unsigned long zone_free_order2_equiv(struct zone *zone)
