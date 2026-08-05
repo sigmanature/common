@@ -69,6 +69,9 @@ enum order0_counter {
 
 static DEFINE_PER_CPU(unsigned long, order0_vmstat[ORDER0_COUNTER_NR]);
 
+static bool order0_cow_parent_root_enabled = true;
+core_param(order0_cow_parent_root, order0_cow_parent_root_enabled, bool, 0644);
+
 static const char * const order0_migratetype_names[ORDER0_MT_NR] = {
 	[ORDER0_MT_MOVABLE] = "movable",
 	[ORDER0_MT_UNMOVABLE] = "unmovable",
@@ -371,6 +374,8 @@ void order0_provenance_record_cow(struct folio *new_folio,
 	if (root_source >= ORDER0_SOURCE_NR)
 		root_source = ORDER0_SOURCE_UNKNOWN;
 	order0_count_source(new_folio, ORDER0_SOURCE_WP_COW);
+	if (!order0_cow_parent_root_enabled)
+		return;
 	old_provenance = old_folio ?
 		order0_folio_provenance_get(old_folio, &old_page_ext) : NULL;
 	if (old_provenance &&
@@ -445,6 +450,8 @@ void order0_provenance_inherit_root(struct folio *new_folio,
 	enum order0_cow_parent_reason parent_reason;
 	u8 cow_depth = 0;
 
+	if (!order0_cow_parent_root_enabled)
+		return;
 	if (root_source >= ORDER0_SOURCE_NR)
 		root_source = ORDER0_SOURCE_UNKNOWN;
 	old_provenance = old_folio ?
