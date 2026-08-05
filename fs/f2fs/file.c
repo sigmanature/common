@@ -1516,6 +1516,10 @@ static int __clone_blkaddrs(struct inode *src_inode, struct inode *dst_inode,
 
 			memcpy_folio(fdst, 0, fsrc, 0, PAGE_SIZE);
 			folio_mark_dirty(fdst);
+			if (i_size_read(dst_inode) <
+				((loff_t)(dst + i + 1) << PAGE_SHIFT))
+				f2fs_i_size_write(dst_inode,
+					((loff_t)(dst + i + 1) << PAGE_SHIFT));
 			folio_set_f2fs_gcing(fdst);
 			f2fs_folio_put(fdst, true);
 			f2fs_folio_put(fsrc, true);
