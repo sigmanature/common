@@ -67,27 +67,6 @@
 /* Proactive kswapd wakeup threshold for order-2 (defined in mm/vmscan.c). */
 extern int kswapd_order2_wakeup_threshold;
 
-DEFINE_STATIC_KEY_FALSE(order0_order2_zone_isolation_key);
-
-static int __init order0_order2_zone_isolation_setup(char *str)
-{
-	bool enabled;
-	int ret;
-
-	ret = kstrtobool(str, &enabled);
-	if (ret)
-		return ret;
-
-	if (enabled) {
-		static_branch_enable(&order0_order2_zone_isolation_key);
-		pr_info("order0_order2_zone_isolation enabled\n");
-	}
-
-	return 0;
-}
-early_param("order0_order2_zone_isolation",
-	    order0_order2_zone_isolation_setup);
-
 /* Free Page Internal flags: for internal, non-pcp variants of free_pages(). */
 typedef int __bitwise fpi_t;
 
@@ -975,8 +954,7 @@ buddy_merge_likely(unsigned long pfn, unsigned long buddy_pfn,
 
 static inline unsigned int zone_max_order(struct zone *zone)
 {
-	if (order0_order2_zone_isolation_enabled() &&
-	    zone_idx(zone) == ZONE_NORMAL)
+	if (zone_idx(zone) == ZONE_NORMAL)
 		return 2;
 
 	return MAX_PAGE_ORDER;
@@ -3840,8 +3818,7 @@ retry:
 		struct page *page;
 		unsigned long mark;
 
-		if (order0_order2_zone_isolation_enabled() &&
-		    (gfp_mask & __GFP_MOVABLE) &&
+		if ((gfp_mask & __GFP_MOVABLE) &&
 		    ((order == 0 && zone_idx(zone) != ZONE_DMA32) ||
 		     (order >= 2 && zone_idx(zone) != ZONE_NORMAL)))
 			continue;

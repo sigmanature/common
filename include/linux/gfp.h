@@ -4,7 +4,6 @@
 
 #include <linux/gfp_types.h>
 
-#include <linux/jump_label.h>
 #include <linux/mmzone.h>
 #include <linux/topology.h>
 #include <linux/alloc_tag.h>
@@ -161,13 +160,6 @@ static inline enum zone_type gfp_zone(gfp_t flags)
 	return z;
 }
 
-DECLARE_STATIC_KEY_FALSE(order0_order2_zone_isolation_key);
-
-static inline bool order0_order2_zone_isolation_enabled(void)
-{
-	return static_branch_unlikely(&order0_order2_zone_isolation_key);
-}
-
 /**
  * gfp_order_zone - determine the target zone based on allocation order
  * @flags: gfp flags
@@ -181,9 +173,6 @@ static inline bool order0_order2_zone_isolation_enabled(void)
 static inline enum zone_type gfp_order_zone(gfp_t flags, int order)
 {
 	enum zone_type z = gfp_zone(flags);
-
-	if (!order0_order2_zone_isolation_enabled())
-		return z;
 
 	if (!(flags & __GFP_MOVABLE))
 		return z;
