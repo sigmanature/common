@@ -44,8 +44,6 @@ void order0_provenance_record_root(struct folio *folio,
 				    enum order0_alloc_source source);
 void order0_provenance_record_migration(struct folio *new_folio,
 					const struct folio *old_folio);
-void order0_provenance_propagate_split(struct folio *new_folio,
-					       const struct folio *old_folio);
 void order0_provenance_record_cow(struct folio *new_folio,
 				   const struct folio *old_folio,
 				   enum order0_alloc_source fallback_source);
@@ -79,12 +77,6 @@ static inline void order0_provenance_record_root(struct folio *folio,
 static inline void
 order0_provenance_record_migration(struct folio *new_folio,
 					const struct folio *old_folio)
-{
-}
-
-static inline void
-order0_provenance_propagate_split(struct folio *new_folio,
-					       const struct folio *old_folio)
 {
 }
 

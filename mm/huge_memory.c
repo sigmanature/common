@@ -3375,7 +3375,6 @@ static void __split_folio_to_order(struct folio *folio, int old_order,
 		 * which needs correct compound_head().
 		 */
 		clear_compound_head(new_head);
-		order0_provenance_propagate_split(new_folio, folio);
 		if (new_order) {
 			prep_compound_page(new_head, new_order);
 			folio_set_large_rmappable(new_folio);
