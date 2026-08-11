@@ -7074,9 +7074,6 @@ static void split_free_pages(struct list_head *list, gfp_t gfp_mask)
 			int i;
 
 			post_alloc_hook(page, order, gfp_mask);
-			if (!order)
-				order0_provenance_record_root(page_folio(page),
-						ORDER0_SOURCE_CMA_CONTIG);
 			set_page_refcounted(page);
 			if (!order)
 				continue;
