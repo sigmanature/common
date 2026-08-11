@@ -7,7 +7,6 @@
 struct folio;
 struct page;
 struct page_ext_operations;
-struct pglist_data;
 struct seq_file;
 struct zone;
 
@@ -69,8 +68,6 @@ void order0_provenance_pcp_alloc(struct zone *zone, int migratetype,
 				 unsigned long nr_pages);
 void order0_provenance_pcp_drain(struct zone *zone, int migratetype,
 				 unsigned long nr_pages);
-unsigned long order0_provenance_pcp_order0_node(struct pglist_data *pgdat);
-unsigned long order0_provenance_pcp_order0_total(void);
 void order0_provenance_vmstat_show(struct seq_file *m);
 #else
 static inline void order0_provenance_prepare_alloc(struct page *page,
@@ -141,17 +138,6 @@ static inline void order0_provenance_pcp_alloc(struct zone *zone,
 static inline void order0_provenance_pcp_drain(struct zone *zone,
 				 int migratetype, unsigned long nr_pages)
 {
-}
-
-static inline unsigned long
-order0_provenance_pcp_order0_node(struct pglist_data *pgdat)
-{
-	return 0;
-}
-
-static inline unsigned long order0_provenance_pcp_order0_total(void)
-{
-	return 0;
 }
 
 static inline void order0_provenance_vmstat_show(struct seq_file *m)

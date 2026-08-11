@@ -1926,14 +1926,12 @@ static void zoneinfo_show_print(struct seq_file *m, pg_data_t *pgdat,
 		seq_printf(m,
 			   "\n    cpu: %i"
 			   "\n              count:    %i"
-			   "\n              order0:   %i"
 			   "\n              high:     %i"
 			   "\n              batch:    %i"
 			   "\n              high_min: %i"
 			   "\n              high_max: %i",
 			   i,
 			   pcp->count,
-			   pcp->order0_count,
 			   pcp->high,
 			   pcp->batch,
 			   pcp->high_min,
@@ -2048,8 +2046,6 @@ static int vmstat_show(struct seq_file *m, void *arg)
 		 * breaking userspace which might depend on them being present.
 		 */
 		seq_puts(m, "nr_unstable 0\n");
-		seq_printf(m, "nr_pcp_order0_total %lu\n",
-			   order0_provenance_pcp_order0_total());
 		order0_provenance_vmstat_show(m);
 	}
 	return 0;

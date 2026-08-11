@@ -529,39 +529,6 @@ void order0_provenance_pcp_drain(struct zone *zone, int migratetype,
 	order0_pcp_account(zone, migratetype, nr_pages, -nr_pages, ORDER0_PCP_DRAIN);
 }
 
-unsigned long order0_provenance_pcp_order0_node(struct pglist_data *pgdat)
-{
-	unsigned long total = 0;
-	int zoneid, cpu;
-
-	for (zoneid = 0; zoneid < MAX_NR_ZONES; zoneid++) {
-		struct zone *zone = &pgdat->node_zones[zoneid];
-
-		if (!populated_zone(zone))
-			continue;
-
-		for_each_possible_cpu(cpu) {
-			struct per_cpu_pages *pcp;
-
-			pcp = per_cpu_ptr(zone->per_cpu_pageset, cpu);
-			total += data_race(READ_ONCE(pcp->order0_count));
-		}
-	}
-
-	return total;
-}
-
-unsigned long order0_provenance_pcp_order0_total(void)
-{
-	unsigned long total = 0;
-	pg_data_t *pgdat;
-
-	for_each_online_pgdat(pgdat)
-		total += order0_provenance_pcp_order0_node(pgdat);
-
-	return total;
-}
-
 static unsigned long order0_counter_sum(enum order0_counter counter)
 {
 	unsigned long total = 0;

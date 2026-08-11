@@ -1531,10 +1531,8 @@ static void free_pcppages_bulk(struct zone *zone, int count,
 			list_del(&page->pcp_list);
 			count -= nr_pages;
 			pcp->count -= nr_pages;
-			if (!order) {
-				pcp->order0_count--;
+			if (!order)
 				order0_provenance_pcp_drain(zone, mt, nr_pages);
-			}
 
 			__free_one_page(page, pfn, zone, order, mt, FPI_NONE);
 			trace_mm_page_pcpu_drain(page, order, mt);
@@ -2902,11 +2900,9 @@ static void free_frozen_page_commit(struct zone *zone,
 	pindex = order_to_pindex(migratetype, order);
 	list_add(&page->pcp_list, &pcp->lists[pindex]);
 	pcp->count += 1 << order;
-	if (!order) {
-		pcp->order0_count++;
+	if (!order)
 		order0_provenance_pcp_free(zone,
 			get_pfnblock_migratetype(page, page_to_pfn(page)), 1);
-	}
 
 	batch = READ_ONCE(pcp->batch);
 	/*
@@ -3349,8 +3345,6 @@ struct page *__rmqueue_pcplist(struct zone *zone, unsigned int order,
 			if (!order) {
 				struct page *pcp_page;
 
-				pcp->order0_count += alloced;
-
 				list_for_each_entry(pcp_page, list, pcp_list)
 					order0_provenance_pcp_refill(zone,
 						get_pfnblock_migratetype(pcp_page,
@@ -3363,11 +3357,9 @@ struct page *__rmqueue_pcplist(struct zone *zone, unsigned int order,
 		page = list_first_entry(list, struct page, pcp_list);
 		list_del(&page->pcp_list);
 		pcp->count -= 1 << order;
-		if (!order) {
-			pcp->order0_count--;
+		if (!order)
 			order0_provenance_pcp_alloc(zone,
 				get_pfnblock_migratetype(page, page_to_pfn(page)), 1);
-		}
 	} while (check_new_pages(page, order));
 
 	return page;
