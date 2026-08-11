@@ -6,7 +6,6 @@
  */
 
 #include <linux/mm.h>
-#include <linux/order0_provenance.h>
 #include <linux/file.h>
 #include <linux/poll.h>
 #include <linux/slab.h>
@@ -114,21 +113,15 @@ void pipe_double_lock(struct pipe_inode_info *pipe1,
 
 static struct page *anon_pipe_get_page(struct pipe_inode_info *pipe)
 {
-	struct page *page;
-
 	for (int i = 0; i < ARRAY_SIZE(pipe->tmp_page); i++) {
 		if (pipe->tmp_page[i]) {
-			page = pipe->tmp_page[i];
+			struct page *page = pipe->tmp_page[i];
 			pipe->tmp_page[i] = NULL;
 			return page;
 		}
 	}
 
-	page = alloc_page(GFP_HIGHUSER | __GFP_ACCOUNT);
-	if (page)
-		order0_provenance_record_root(page_folio(page),
-					      ORDER0_SOURCE_PIPE_BUFFER);
-	return page;
+	return alloc_page(GFP_HIGHUSER | __GFP_ACCOUNT);
 }
 
 static void anon_pipe_put_page(struct pipe_inode_info *pipe,
