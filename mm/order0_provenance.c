@@ -91,7 +91,6 @@ static const char * const order0_source_names[ORDER0_SOURCE_NR] = {
 	[ORDER0_SOURCE_SLAB] = "slab",
 	[ORDER0_SOURCE_ZSMALLOC] = "zsmalloc",
 	[ORDER0_SOURCE_PAGE_FRAG] = "page_frag",
-	[ORDER0_SOURCE_SPLICE] = "splice",
 };
 
 static const char * const order0_pcp_flow_names[ORDER0_PCP_FLOW_NR] = {
