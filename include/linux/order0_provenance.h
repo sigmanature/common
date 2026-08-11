@@ -27,7 +27,6 @@ enum order0_alloc_source {
 	ORDER0_SOURCE_PIPE_BUFFER,
 	ORDER0_SOURCE_SLAB,
 	ORDER0_SOURCE_ZSMALLOC,
-	ORDER0_SOURCE_MIGRATION,
 	ORDER0_SOURCE_PAGE_FRAG,
 	ORDER0_SOURCE_SPLICE,
 	ORDER0_SOURCE_KSM,
@@ -42,8 +41,6 @@ extern struct page_ext_operations order0_provenance_ops;
 void order0_provenance_prepare_alloc(struct page *page, unsigned int order);
 void order0_provenance_record_root(struct folio *folio,
 				    enum order0_alloc_source source);
-void order0_provenance_record_migration(struct folio *new_folio,
-					const struct folio *old_folio);
 void order0_provenance_record_cow(struct folio *new_folio,
 				   const struct folio *old_folio,
 				   enum order0_alloc_source fallback_source);
@@ -71,12 +68,6 @@ static inline void order0_provenance_prepare_alloc(struct page *page,
 
 static inline void order0_provenance_record_root(struct folio *folio,
 					   enum order0_alloc_source source)
-{
-}
-
-static inline void
-order0_provenance_record_migration(struct folio *new_folio,
-					const struct folio *old_folio)
 {
 }
 

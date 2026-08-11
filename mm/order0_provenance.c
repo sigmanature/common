@@ -90,7 +90,6 @@ static const char * const order0_source_names[ORDER0_SOURCE_NR] = {
 	[ORDER0_SOURCE_PIPE_BUFFER] = "pipe_buffer",
 	[ORDER0_SOURCE_SLAB] = "slab",
 	[ORDER0_SOURCE_ZSMALLOC] = "zsmalloc",
-	[ORDER0_SOURCE_MIGRATION] = "migration",
 	[ORDER0_SOURCE_PAGE_FRAG] = "page_frag",
 	[ORDER0_SOURCE_SPLICE] = "splice",
 	[ORDER0_SOURCE_KSM] = "ksm",
@@ -287,37 +286,6 @@ void order0_provenance_record_root(struct folio *folio,
 	page_ext_put(page_ext);
 }
 EXPORT_SYMBOL_GPL(order0_provenance_record_root);
-
-void order0_provenance_record_migration(struct folio *new_folio,
-					const struct folio *old_folio)
-{
-	struct page_ext *old_page_ext = NULL;
-	struct page_ext *new_page_ext = NULL;
-	struct order0_folio_provenance *old_provenance;
-	struct order0_folio_provenance *new_provenance;
-	enum order0_alloc_source root_source = ORDER0_SOURCE_MIGRATION;
-	u8 cow_depth = 0;
-
-	order0_count_source(new_folio, ORDER0_SOURCE_MIGRATION);
-	old_provenance = old_folio ?
-		order0_folio_provenance_get(old_folio, &old_page_ext) : NULL;
-	if (old_provenance &&
-	    old_provenance->root_source > ORDER0_SOURCE_UNKNOWN &&
-	    old_provenance->root_source < ORDER0_SOURCE_NR) {
-		root_source = old_provenance->root_source;
-		cow_depth = old_provenance->cow_depth;
-	}
-	if (old_page_ext)
-		page_ext_put(old_page_ext);
-
-	new_provenance = order0_folio_provenance_get(new_folio, &new_page_ext);
-	if (!new_provenance)
-		return;
-	new_provenance->root_source = root_source;
-	new_provenance->cow_depth = cow_depth;
-	page_ext_put(new_page_ext);
-}
-EXPORT_SYMBOL_GPL(order0_provenance_record_migration);
 
 void order0_provenance_record_cow(struct folio *new_folio,
 				  const struct folio *old_folio,
