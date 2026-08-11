@@ -43,7 +43,6 @@
 #include <asm/tlbflush.h>
 #include <asm/shmparam.h>
 #include <linux/page_owner.h>
-#include <linux/order0_provenance.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/vmalloc.h>
@@ -3638,10 +3637,6 @@ vm_area_alloc_pages(gfp_t gfp, int nid,
 			if (nr != nr_pages_request)
 				break;
 		}
-
-		for (i = 0; i < nr_allocated; i++)
-			order0_provenance_record_root(page_folio(pages[i]),
-						      ORDER0_SOURCE_VMALLOC);
 	}
 
 	/* High-order pages or fallback path if "bulk" fails. */
@@ -3666,10 +3661,6 @@ vm_area_alloc_pages(gfp_t gfp, int nid,
 		 */
 		if (order)
 			split_page(page, order);
-
-		if (!order)
-			order0_provenance_record_root(page_folio(page),
-						      ORDER0_SOURCE_VMALLOC);
 
 		/*
 		 * Careful, we allocate and map page-order pages, but
