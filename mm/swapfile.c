@@ -42,7 +42,6 @@
 #include <linux/suspend.h>
 #include <linux/zswap.h>
 #include <linux/plist.h>
-#include <linux/order0_provenance.h>
 
 #include <asm/tlbflush.h>
 #include <linux/swapops.h>
@@ -443,10 +442,8 @@ static struct swap_table *swap_table_alloc(gfp_t gfp)
 		return kmem_cache_zalloc(swap_table_cachep, gfp);
 
 	folio = folio_alloc(gfp | __GFP_ZERO, 0);
-	if (folio) {
-		order0_provenance_record_root(folio, ORDER0_SOURCE_SWAP_METADATA);
+	if (folio)
 		return folio_address(folio);
-	}
 	return NULL;
 }
 
@@ -3857,9 +3854,6 @@ int add_swap_count_continuation(swp_entry_t entry, gfp_t gfp_mask)
 	 * for latency not to zero a page while GFP_ATOMIC and holding locks.
 	 */
 	page = alloc_page(gfp_mask | __GFP_HIGHMEM);
-	if (page)
-		order0_provenance_record_root(page_folio(page),
-					      ORDER0_SOURCE_SWAP_METADATA);
 
 	si = get_swap_device(entry);
 	if (!si) {
