@@ -316,7 +316,6 @@ int min_free_kbytes = 1024;
 int user_min_free_kbytes = -1;
 static int watermark_boost_factor __read_mostly = 15000;
 static int watermark_scale_factor = 10;
-static atomic64_t cuttlefish_normal_wmark_low_high_kbytes = ATOMIC64_INIT(0);
 int defrag_mode;
 
 /* movable_zone is the "real" zone pages in ZONE_MOVABLE are taken from */
@@ -6516,11 +6515,6 @@ static void __setup_per_zone_wmarks(void)
 
 	for_each_zone(zone) {
 		u64 tmp;
-		u64 normal_wmark_targets;
-		unsigned long normal_low_kbytes;
-		unsigned long normal_high_kbytes;
-		unsigned long normal_low_pages;
-		unsigned long normal_high_pages;
 
 		spin_lock_irqsave(&zone->lock, flags);
 		tmp = (u64)pages_min * zone_managed_pages(zone);
@@ -6561,21 +6555,6 @@ static void __setup_per_zone_wmarks(void)
 		zone->_watermark[WMARK_LOW]  = min_wmark_pages(zone) + tmp;
 		zone->_watermark[WMARK_HIGH] = low_wmark_pages(zone) + tmp;
 		zone->_watermark[WMARK_PROMO] = high_wmark_pages(zone) + tmp;
-
-		normal_wmark_targets = atomic64_read(
-			&cuttlefish_normal_wmark_low_high_kbytes);
-		normal_low_kbytes = lower_32_bits(normal_wmark_targets);
-		normal_high_kbytes = upper_32_bits(normal_wmark_targets);
-		normal_low_pages = normal_low_kbytes >> (PAGE_SHIFT - 10);
-		normal_high_pages = normal_high_kbytes >> (PAGE_SHIFT - 10);
-		if (zone_idx(zone) == ZONE_NORMAL && normal_low_pages &&
-		    normal_high_pages > normal_low_pages &&
-		    normal_low_pages > min_wmark_pages(zone) &&
-		    normal_high_pages < zone_managed_pages(zone)) {
-			zone->_watermark[WMARK_LOW] = normal_low_pages;
-			zone->_watermark[WMARK_HIGH] = normal_high_pages;
-			zone->_watermark[WMARK_PROMO] = normal_high_pages + tmp;
-		}
 		trace_mm_setup_per_zone_wmarks(zone);
 
 		spin_unlock_irqrestore(&zone->lock, flags);
@@ -6700,53 +6679,6 @@ static int watermark_scale_factor_sysctl_handler(const struct ctl_table *table, 
 	if (write)
 		setup_per_zone_wmarks();
 
-	return 0;
-}
-
-static int cuttlefish_normal_wmark_sysctl_handler(const struct ctl_table *table,
-		int write, void *buffer, size_t *length, loff_t *ppos)
-{
-	struct ctl_table table_copy = *table;
-	struct zone *zone;
-	unsigned long targets[2];
-	unsigned long low_pages;
-	unsigned long high_pages;
-	u64 current_targets;
-	bool found_normal = false;
-	int rc;
-
-	current_targets = atomic64_read(&cuttlefish_normal_wmark_low_high_kbytes);
-	targets[0] = lower_32_bits(current_targets);
-	targets[1] = upper_32_bits(current_targets);
-	table_copy.data = targets;
-	rc = proc_doulongvec_minmax(&table_copy, write, buffer, length, ppos);
-	if (rc || !write)
-		return rc;
-
-	if (!targets[0] && !targets[1])
-		goto apply;
-	if (!targets[0] || !targets[1] || targets[0] >= targets[1] ||
-	    targets[0] & ((PAGE_SIZE >> 10) - 1) ||
-	    targets[1] & ((PAGE_SIZE >> 10) - 1))
-		return -EINVAL;
-
-	low_pages = targets[0] >> (PAGE_SHIFT - 10);
-	high_pages = targets[1] >> (PAGE_SHIFT - 10);
-	for_each_populated_zone(zone) {
-		if (zone_idx(zone) != ZONE_NORMAL)
-			continue;
-		found_normal = true;
-		if (low_pages <= min_wmark_pages(zone) ||
-		    high_pages >= zone_managed_pages(zone))
-			return -EINVAL;
-	}
-	if (!found_normal)
-		return -ENODEV;
-
-apply:
-	atomic64_set(&cuttlefish_normal_wmark_low_high_kbytes,
-		((u64)targets[1] << 32) | targets[0]);
-	setup_per_zone_wmarks();
 	return 0;
 }
 
@@ -6895,13 +6827,6 @@ static const struct ctl_table page_alloc_sysctl_table[] = {
 		.proc_handler	= watermark_scale_factor_sysctl_handler,
 		.extra1		= SYSCTL_ONE,
 		.extra2		= SYSCTL_THREE_THOUSAND,
-	},
-	{
-		.procname	= "cuttlefish_normal_wmark_low_high_kbytes",
-		.data		= &cuttlefish_normal_wmark_low_high_kbytes,
-		.maxlen		= sizeof(unsigned long) * 2,
-		.mode		= 0644,
-		.proc_handler	= cuttlefish_normal_wmark_sysctl_handler,
 	},
 	{
 		.procname	= "defrag_mode",
