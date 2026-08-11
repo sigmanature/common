@@ -59,7 +59,6 @@
 #include <linux/delayacct.h>
 #include <linux/cacheinfo.h>
 #include <linux/pgalloc_tag.h>
-#include <linux/order0_provenance.h>
 #include <asm/div64.h>
 #include "internal.h"
 #include "shuffle.h"
@@ -1531,8 +1530,6 @@ static void free_pcppages_bulk(struct zone *zone, int count,
 			list_del(&page->pcp_list);
 			count -= nr_pages;
 			pcp->count -= nr_pages;
-			if (!order)
-				order0_provenance_pcp_drain(zone, mt, nr_pages);
 
 			__free_one_page(page, pfn, zone, order, mt, FPI_NONE);
 			trace_mm_page_pcpu_drain(page, order, mt);
@@ -1916,7 +1913,6 @@ inline void post_alloc_hook(struct page *page, unsigned int order,
 	set_page_owner(page, order, gfp_flags);
 	page_table_check_alloc(page, order);
 	pgalloc_tag_add(page, current, 1 << order);
-	order0_provenance_prepare_alloc(page, order);
 }
 
 static void prep_new_page(struct page *page, unsigned int order, gfp_t gfp_flags,
@@ -2900,9 +2896,6 @@ static void free_frozen_page_commit(struct zone *zone,
 	pindex = order_to_pindex(migratetype, order);
 	list_add(&page->pcp_list, &pcp->lists[pindex]);
 	pcp->count += 1 << order;
-	if (!order)
-		order0_provenance_pcp_free(zone,
-			get_pfnblock_migratetype(page, page_to_pfn(page)), 1);
 
 	batch = READ_ONCE(pcp->batch);
 	/*
@@ -3342,14 +3335,6 @@ struct page *__rmqueue_pcplist(struct zone *zone, unsigned int order,
 					migratetype, alloc_flags);
 
 			pcp->count += alloced << order;
-			if (!order) {
-				struct page *pcp_page;
-
-				list_for_each_entry(pcp_page, list, pcp_list)
-					order0_provenance_pcp_refill(zone,
-						get_pfnblock_migratetype(pcp_page,
-							page_to_pfn(pcp_page)), 1);
-			}
 			if (unlikely(list_empty(list)))
 				return NULL;
 		}
@@ -3357,9 +3342,6 @@ struct page *__rmqueue_pcplist(struct zone *zone, unsigned int order,
 		page = list_first_entry(list, struct page, pcp_list);
 		list_del(&page->pcp_list);
 		pcp->count -= 1 << order;
-		if (!order)
-			order0_provenance_pcp_alloc(zone,
-				get_pfnblock_migratetype(page, page_to_pfn(page)), 1);
 	} while (check_new_pages(page, order));
 
 	return page;
