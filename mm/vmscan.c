@@ -229,15 +229,12 @@ struct order2_kswapd_wake_sample {
 	u64 try_sleep_epoch;
 	u64 first_wake_ns;
 	u64 first_wake_epoch;
-	u64 pending_trace_seq;
 	unsigned long first_wake_free;
 	int first_wake_zidx;
-	int pending_trace_zidx;
 };
 
 static struct order2_kswapd_wake_sample order2_kswapd_wake[MAX_NUMNODES];
 static atomic64_t order2_kswapd_wake_epoch = ATOMIC64_INIT(0);
-static atomic64_t order2_kswapd_trace_seq = ATOMIC64_INIT(0);
 
 #define DIRECT_RECLAIM_RING_SIZE	131072
 
@@ -262,11 +259,6 @@ static struct direct_reclaim_sample
 struct direct_reclaim_handle {
 	u64 seq;
 	int idx;
-};
-
-struct order2_kswapd_trace_context {
-	bool active;
-	bool emitted;
 };
 
 static struct direct_reclaim_handle
@@ -7255,8 +7247,7 @@ static bool pgdat_watermark_boosted(pg_data_t *pgdat, int highest_zoneidx)
  * Returns true if there is an eligible zone balanced for the request order
  * and highest_zoneidx
  */
-static bool pgdat_balanced(pg_data_t *pgdat, int order, int highest_zoneidx,
-			   struct order2_kswapd_trace_context *order2_trace)
+static bool pgdat_balanced(pg_data_t *pgdat, int order, int highest_zoneidx)
 {
 	int i;
 	unsigned long mark = -1;
@@ -7269,7 +7260,6 @@ static bool pgdat_balanced(pg_data_t *pgdat, int order, int highest_zoneidx,
 	for_each_managed_zone_pgdat(zone, pgdat, i, highest_zoneidx) {
 		enum zone_stat_item item;
 		unsigned long free_pages;
-		unsigned long free_order2;
 
 		if (sysctl_numa_balancing_mode & NUMA_BALANCING_MEMORY_TIERING)
 			mark = promo_wmark_pages(zone);
@@ -7316,27 +7306,9 @@ static bool pgdat_balanced(pg_data_t *pgdat, int order, int highest_zoneidx,
 		 * order-2-equivalent free blocks before kswapd considers the node
 		 * balanced. The sysctl defaults to 0, preserving existing behavior.
 		 */
-	if (order == 2 && kswapd_order2_threshold) {
-			free_order2 = zone_free_order2_equiv(zone);
-			if (free_order2 < kswapd_order2_threshold)
-				continue;
-
-			if (order2_trace && order2_trace->active &&
-			    !order2_trace->emitted) {
-				struct order2_kswapd_wake_sample *sample;
-				u64 seq;
-
-				sample = &order2_kswapd_wake[pgdat->node_id];
-				if (!READ_ONCE(sample->pending_trace_seq)) {
-					seq = atomic64_inc_return(&order2_kswapd_trace_seq);
-					WRITE_ONCE(sample->pending_trace_zidx, zone_idx(zone));
-					WRITE_ONCE(sample->pending_trace_seq, seq);
-					trace_mm_order2_kswapd_pgdat_balanced(seq,
-						pgdat->node_id, zone_idx(zone), free_order2);
-					order2_trace->emitted = true;
-				}
-			}
-		}
+		if (order == 2 && kswapd_order2_threshold &&
+		    count_free_order_pages(zone, 2) < kswapd_order2_threshold)
+			continue;
 
 		return true;
 	}
@@ -7392,7 +7364,7 @@ static bool prepare_kswapd_sleep(pg_data_t *pgdat, int order,
 	if (atomic_read(&pgdat->kswapd_failures) >= MAX_RECLAIM_RETRIES)
 		return true;
 
-	if (pgdat_balanced(pgdat, order, highest_zoneidx, NULL)) {
+	if (pgdat_balanced(pgdat, order, highest_zoneidx)) {
 		clear_pgdat_congested(pgdat);
 		return true;
 	}
@@ -7494,7 +7466,6 @@ static int balance_pgdat(pg_data_t *pgdat, int order, int highest_zoneidx)
 	bool boosted;
 	struct zone *zone;
 	unsigned int order2_iters = 0;
-	struct order2_kswapd_trace_context order2_trace = { 0 };
 	struct scan_control sc = {
 		.gfp_mask = GFP_KERNEL,
 		.order = order,
@@ -7506,7 +7477,7 @@ static int balance_pgdat(pg_data_t *pgdat, int order, int highest_zoneidx)
 	__fs_reclaim_acquire(_THIS_IP_);
 
 	count_vm_event(PAGEOUTRUN);
-	order2_trace.active = order2_kswapd_account_pgoutrun(pgdat);
+	order2_kswapd_account_pgoutrun(pgdat);
 
 	/*
 	 * Account for the reclaim boost. Note that the zone boost is left in
@@ -7562,8 +7533,7 @@ restart:
 		 * on the grounds that the normal reclaim should be enough to
 		 * re-evaluate if boosting is required when kswapd next wakes.
 		 */
-		balanced = pgdat_balanced(pgdat, sc.order, highest_zoneidx,
-					 &order2_trace);
+		balanced = pgdat_balanced(pgdat, sc.order, highest_zoneidx);
 		if (!balanced && nr_boost_reclaim) {
 			nr_boost_reclaim = 0;
 			goto restart;
@@ -7671,7 +7641,7 @@ restart:
 	 * more order-2 free blocks.
 	 */
 	if (sc.order == 2 && kswapd_order2_threshold &&
-	    !pgdat_balanced(pgdat, 2, highest_zoneidx, &order2_trace))
+	    !pgdat_balanced(pgdat, 2, highest_zoneidx))
 		goto restart;
 
 	if (!sc.nr_reclaimed)
@@ -7739,28 +7709,12 @@ static enum zone_type kswapd_highest_zoneidx(pg_data_t *pgdat,
 static void kswapd_try_to_sleep(pg_data_t *pgdat, int alloc_order, int reclaim_order,
 				unsigned int highest_zoneidx)
 {
-	struct order2_kswapd_wake_sample *sample;
-	struct zone *zone;
 	long remaining = 0;
-	u64 seq;
-	int zidx;
 	DEFINE_WAIT(wait);
 
 	if (freezing(current) || kthread_should_stop())
 		return;
 
-	sample = &order2_kswapd_wake[pgdat->node_id];
-	seq = READ_ONCE(sample->pending_trace_seq);
-	zidx = READ_ONCE(sample->pending_trace_zidx);
-	if (seq) {
-		WRITE_ONCE(sample->pending_trace_seq, 0);
-		if (zidx >= 0 && zidx < MAX_NR_ZONES) {
-			zone = &pgdat->node_zones[zidx];
-			if (managed_zone(zone))
-				trace_mm_order2_kswapd_try_sleep(seq, pgdat->node_id,
-					zidx, zone_free_order2_equiv(zone));
-		}
-	}
 	order2_kswapd_mark_try_sleep(pgdat);
 	prepare_to_wait(&pgdat->kswapd_wait, &wait, TASK_INTERRUPTIBLE);
 
@@ -7976,7 +7930,7 @@ enum kswapd_wake_result wakeup_kswapd(struct zone *zone, gfp_t gfp_flags,
 		return KSWAPD_WAKEUP_MAX_FAILURES;
 	}
 
-	if (pgdat_balanced(pgdat, order, highest_zoneidx, NULL) &&
+	if (pgdat_balanced(pgdat, order, highest_zoneidx) &&
 	    !pgdat_watermark_boosted(pgdat, highest_zoneidx)) {
 		/*
 		 * There may be plenty of free memory available, but it's too

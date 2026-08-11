@@ -217,56 +217,6 @@ TRACE_EVENT(mm_order2_kswapd_pgoutrun,
 		__entry->pgoutrun_free)
 );
 
-TRACE_EVENT(mm_order2_kswapd_pgdat_balanced,
-
-	TP_PROTO(u64 seq, int nid, int zid, unsigned long free_order2),
-
-	TP_ARGS(seq, nid, zid, free_order2),
-
-	TP_STRUCT__entry(
-		__field(u64, seq)
-		__field(int, nid)
-		__field(int, zid)
-		__field(unsigned long, free_order2)
-	),
-
-	TP_fast_assign(
-		__entry->seq = seq;
-		__entry->nid = nid;
-		__entry->zid = zid;
-		__entry->free_order2 = free_order2;
-	),
-
-	TP_printk("seq=%llu nid=%d zid=%d free_order2=%lu",
-		__entry->seq, __entry->nid, __entry->zid,
-		__entry->free_order2)
-);
-
-TRACE_EVENT(mm_order2_kswapd_try_sleep,
-
-	TP_PROTO(u64 seq, int nid, int zid, unsigned long free_order2),
-
-	TP_ARGS(seq, nid, zid, free_order2),
-
-	TP_STRUCT__entry(
-		__field(u64, seq)
-		__field(int, nid)
-		__field(int, zid)
-		__field(unsigned long, free_order2)
-	),
-
-	TP_fast_assign(
-		__entry->seq = seq;
-		__entry->nid = nid;
-		__entry->zid = zid;
-		__entry->free_order2 = free_order2;
-	),
-
-	TP_printk("seq=%llu nid=%d zid=%d free_order2=%lu",
-		__entry->seq, __entry->nid, __entry->zid,
-		__entry->free_order2)
-);
-
 TRACE_EVENT(mm_order2_buddy_alloc_cross,
 
 	TP_PROTO(int nid, int zid, unsigned long pre_free,
