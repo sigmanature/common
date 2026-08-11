@@ -2853,6 +2853,10 @@ enum compact_result try_to_compact_pages(gfp_t gfp_mask, unsigned int order,
 			!__cpuset_zone_allowed(zone, gfp_mask))
 				continue;
 
+		if (order0_order2_zone_isolation_enabled() &&
+		    zone_idx(zone) == ZONE_NORMAL)
+			continue;
+
 		if (prio > MIN_COMPACT_PRIORITY
 					&& compaction_deferred(zone, order)) {
 			rc = max_t(enum compact_result, COMPACT_DEFERRED, rc);
@@ -2929,6 +2933,10 @@ static int compact_node(pg_data_t *pgdat, bool proactive)
 
 		if (fatal_signal_pending(current))
 			return -EINTR;
+
+		if (order0_order2_zone_isolation_enabled() &&
+		    zone_idx(zone) == ZONE_NORMAL)
+			continue;
 
 		cc.zone = zone;
 
@@ -3058,6 +3066,10 @@ static bool kcompactd_node_suitable(pg_data_t *pgdat)
 		zone = &pgdat->node_zones[zoneid];
 
 		if (!populated_zone(zone))
+			continue;
+
+		if (order0_order2_zone_isolation_enabled() &&
+		    zone_idx(zone) == ZONE_NORMAL)
 			continue;
 
 		ret = compaction_suit_allocation_order(zone,

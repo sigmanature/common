@@ -6716,7 +6716,7 @@ static void shrink_zones(struct zonelist *zonelist, struct scan_control *sc)
 	orig_mask = sc->gfp_mask;
 	if (buffer_heads_over_limit) {
 		sc->gfp_mask |= __GFP_HIGHMEM;
-		sc->reclaim_idx = gfp_zone(sc->gfp_mask);
+		sc->reclaim_idx = gfp_order_zone(sc->gfp_mask, sc->order);
 	}
 
 	for_each_zone_zonelist_nodemask(zone, z, zonelist,
@@ -7067,7 +7067,7 @@ unsigned long try_to_free_pages(struct zonelist *zonelist, int order,
 	struct scan_control sc = {
 		.nr_to_reclaim = SWAP_CLUSTER_MAX,
 		.gfp_mask = current_gfp_context(gfp_mask),
-		.reclaim_idx = gfp_zone(gfp_mask),
+		.reclaim_idx = gfp_order_zone(gfp_mask, order),
 		.order = order,
 		.nodemask = nodemask,
 		.priority = DEF_PRIORITY,
@@ -7272,7 +7272,7 @@ static bool pgdat_balanced(pg_data_t *pgdat, int order, int highest_zoneidx,
 		unsigned long free_order2;
 
 		if (order0_order2_zone_isolation_enabled() &&
-		    order < 2 && zone_idx(zone) != ZONE_DMA32)
+		    order == 0 && zone_idx(zone) != ZONE_DMA32)
 			continue;
 		if (order0_order2_zone_isolation_enabled() &&
 		    order >= 2 && zone_idx(zone) != ZONE_NORMAL)
@@ -7946,12 +7946,16 @@ enum kswapd_wake_result wakeup_kswapd(struct zone *zone, gfp_t gfp_flags,
 {
 	pg_data_t *pgdat;
 	enum zone_type curr_idx;
+	enum zone_type order_idx = gfp_order_zone(gfp_flags, order);
 
 	if (!managed_zone(zone))
 		return KSWAPD_WAKEUP_UNMANAGED_ZONE;
 
 	if (!cpuset_zone_allowed(zone, gfp_flags))
 		return KSWAPD_WAKEUP_CPUSET_DENIED;
+
+	if (highest_zoneidx > order_idx)
+		highest_zoneidx = order_idx;
 
 	pgdat = zone->zone_pgdat;
 	curr_idx = READ_ONCE(pgdat->kswapd_highest_zoneidx);
@@ -8267,7 +8271,7 @@ int node_reclaim(struct pglist_data *pgdat, gfp_t gfp_mask, unsigned int order)
 		.may_writepage = !!(node_reclaim_mode & RECLAIM_WRITE),
 		.may_unmap = !!(node_reclaim_mode & RECLAIM_UNMAP),
 		.may_swap = 1,
-		.reclaim_idx = gfp_zone(gfp_mask),
+		.reclaim_idx = gfp_order_zone(gfp_mask, order),
 	};
 
 	/*
