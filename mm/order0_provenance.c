@@ -83,7 +83,6 @@ static const char * const order0_source_names[ORDER0_SOURCE_NR] = {
 	[ORDER0_SOURCE_SWAP_METADATA] = "swap_metadata",
 	[ORDER0_SOURCE_SECRETMEM] = "secretmem",
 	[ORDER0_SOURCE_VMALLOC] = "vmalloc",
-	[ORDER0_SOURCE_DMABUF_HEAP] = "dmabuf_heap",
 	[ORDER0_SOURCE_UFFD_MFILL] = "uffd_mfill",
 	[ORDER0_SOURCE_SHMEM] = "shmem",
 	[ORDER0_SOURCE_VIRTIO_DRM_SHMEM] = "virtio_drm_shmem",

@@ -19,7 +19,6 @@
 #include <linux/iommu.h>
 #include <linux/mm.h>
 #include <linux/module.h>
-#include <linux/order0_provenance.h>
 #include <linux/printk.h>
 #include <linux/scatterlist.h>
 #include <linux/swiotlb.h>
@@ -370,9 +369,6 @@ static struct page *alloc_largest_available(unsigned long size,
 		page = alloc_pages(order_flags[i], orders[i]);
 		if (!page)
 			continue;
-		if (!orders[i])
-			order0_provenance_record_root(page_folio(page),
-						      ORDER0_SOURCE_DMABUF_HEAP);
 		return page;
 	}
 	return NULL;
