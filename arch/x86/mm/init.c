@@ -121,26 +121,6 @@ static bool __initdata can_use_brk_pgt = true;
  */
 static bool disable_dma32 __ro_after_init;
 
-#ifdef CONFIG_ZONE_DMA32
-static unsigned long __initdata cuttlefish_dma32_limit_pfn = MAX_DMA32_PFN;
-
-static int __init early_cuttlefish_dma32_limit_mb(char *buf)
-{
-	unsigned long limit_mb;
-	unsigned long min_mb = MAX_DMA_PFN >> (20 - PAGE_SHIFT);
-	unsigned long max_mb = MAX_DMA32_PFN >> (20 - PAGE_SHIFT);
-
-	if (!buf || kstrtoul(buf, 0, &limit_mb))
-		return -EINVAL;
-	if (limit_mb < min_mb || limit_mb > max_mb)
-		return -EINVAL;
-
-	cuttlefish_dma32_limit_pfn = limit_mb << (20 - PAGE_SHIFT);
-	return 0;
-}
-early_param("cuttlefish_dma32_limit_mb", early_cuttlefish_dma32_limit_mb);
-#endif
-
 /*
  * Pages returned are already directly mapped.
  *
@@ -1033,8 +1013,7 @@ void __init zone_sizes_init(void)
 	max_zone_pfns[ZONE_DMA]		= min(MAX_DMA_PFN, max_low_pfn);
 #endif
 #ifdef CONFIG_ZONE_DMA32
-	max_zone_pfns[ZONE_DMA32]	= disable_dma32 ? 0 :
-		min(cuttlefish_dma32_limit_pfn, max_low_pfn);
+	max_zone_pfns[ZONE_DMA32]	= disable_dma32 ? 0 : min(MAX_DMA32_PFN, max_low_pfn);
 #endif
 	max_zone_pfns[ZONE_NORMAL]	= max_low_pfn;
 #ifdef CONFIG_HIGHMEM
