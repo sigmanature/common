@@ -30,7 +30,6 @@
 #include <linux/file.h>
 #include <linux/fileattr.h>
 #include <linux/mm.h>
-#include <linux/order0_provenance.h>
 #include <linux/random.h>
 #include <linux/sched/signal.h>
 #include <linux/export.h>
@@ -1876,26 +1875,9 @@ static struct folio *shmem_alloc_folio(gfp_t gfp, int order,
 	mpol = shmem_get_pgoff_policy(info, index, order, &ilx);
 	folio = folio_alloc_mpol(gfp, order, mpol, ilx, numa_node_id());
 	mpol_cond_put(mpol);
-	if (folio) {
-		enum order0_alloc_source source = READ_ONCE(info->order0_source);
-
-		if (source == ORDER0_SOURCE_UNKNOWN || source >= ORDER0_SOURCE_NR)
-			source = ORDER0_SOURCE_SHMEM;
-		order0_provenance_record_root(folio, source);
-	}
 
 	return folio;
 }
-
-void shmem_set_order0_source(struct file *file,
-			     enum order0_alloc_source source)
-{
-	if (!file || source >= ORDER0_SOURCE_NR)
-		return;
-
-	WRITE_ONCE(SHMEM_I(file_inode(file))->order0_source, source);
-}
-EXPORT_SYMBOL_GPL(shmem_set_order0_source);
 
 static struct folio *shmem_alloc_and_add_folio(struct vm_fault *vmf,
 		gfp_t gfp, struct inode *inode, pgoff_t index,

@@ -24,7 +24,6 @@
  */
 
 #include <linux/dma-mapping.h>
-#include <linux/shmem_fs.h>
 #include <linux/moduleparam.h>
 
 #include "virtgpu_drv.h"
@@ -219,8 +218,6 @@ int virtio_gpu_object_create(struct virtio_gpu_device *vgdev,
 	shmem_obj = drm_gem_shmem_create(vgdev->ddev, params->size);
 	if (IS_ERR(shmem_obj))
 		return PTR_ERR(shmem_obj);
-	shmem_set_order0_source(shmem_obj->base.filp,
-			       ORDER0_SOURCE_VIRTIO_DRM_SHMEM);
 	bo = gem_to_virtio_gpu_obj(&shmem_obj->base);
 
 	ret = virtio_gpu_resource_id_get(vgdev, &bo->hw_res_handle);
