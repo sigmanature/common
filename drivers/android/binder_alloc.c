@@ -22,7 +22,6 @@
 #include <asm/cacheflush.h>
 #include <linux/uaccess.h>
 #include <linux/highmem.h>
-#include <linux/order0_provenance.h>
 #include <linux/sizes.h>
 #include <kunit/visibility.h>
 #include "binder_alloc.h"
@@ -288,8 +287,6 @@ static struct page *binder_page_alloc(struct binder_alloc *alloc,
 	page = alloc_page(GFP_KERNEL | __GFP_HIGHMEM | __GFP_ZERO);
 	if (!page)
 		return NULL;
-	order0_provenance_record_root(page_folio(page),
-				      ORDER0_SOURCE_BINDER_BUFFER);
 
 	/* allocate and install shrinker metadata under page->private */
 	mdata = kzalloc(sizeof(*mdata), GFP_KERNEL);
