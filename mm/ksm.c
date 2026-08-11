@@ -16,7 +16,6 @@
 #include <linux/errno.h>
 #include <linux/mm.h>
 #include <linux/mm_inline.h>
-#include <linux/order0_provenance.h>
 #include <linux/fs.h>
 #include <linux/mman.h>
 #include <linux/sched.h>
@@ -3093,7 +3092,6 @@ struct folio *ksm_might_need_to_copy(struct folio *folio,
 		new_folio = NULL;
 	}
 	if (new_folio) {
-		order0_provenance_record_root(new_folio, ORDER0_SOURCE_KSM);
 		if (copy_mc_user_highpage(folio_page(new_folio, 0), page,
 								addr, vma)) {
 			folio_put(new_folio);
