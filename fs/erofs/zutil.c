@@ -68,7 +68,7 @@ int z_erofs_gbuf_growsize(unsigned int nrpages)
 	struct page **tmp_pages = NULL;
 	struct z_erofs_gbuf *gbuf;
 	void *ptr, *old_ptr;
-	int last, i, j, k;
+	int last, i, j;
 
 	mutex_lock(&gbuf_resize_mutex);
 	/* avoid shrinking gbufs, since no idea how many fses rely on */
@@ -89,9 +89,6 @@ int z_erofs_gbuf_growsize(unsigned int nrpages)
 			last = j;
 			j = alloc_pages_bulk(GFP_KERNEL, nrpages,
 					     tmp_pages);
-			for (k = last; k < j; k++)
-				order0_provenance_record_root(page_folio(tmp_pages[k]),
-						ORDER0_SOURCE_EROFS_DECOMPRESS);
 			if (last == j)
 				goto out;
 		} while (j != nrpages);
@@ -189,12 +186,8 @@ struct page *__erofs_allocpage(struct page **pagepool, gfp_t gfp, bool tryrsv)
 			page = z_erofs_rsvbuf->pages[--z_erofs_rsvbuf->nrpages];
 		spin_unlock(&z_erofs_rsvbuf->lock);
 	}
-	if (!page) {
+	if (!page)
 		page = alloc_page(gfp);
-		if (page)
-			order0_provenance_record_root(page_folio(page),
-					ORDER0_SOURCE_EROFS_DECOMPRESS);
-	}
 	DBG_BUGON(page && page_ref_count(page) != 1);
 	return page;
 }
