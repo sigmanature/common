@@ -113,9 +113,6 @@ static unsigned long release_free_list(struct list_head *freepages)
 			 * that we can free them via __free_page.
 			 */
 			mark_allocated(page, order, __GFP_MOVABLE);
-			if (!order)
-				order0_provenance_record_root(page_folio(page),
-						ORDER0_SOURCE_COMPACTION_CLEANUP);
 			__free_pages(page, order);
 			if (pfn > high_pfn)
 				high_pfn = pfn;
