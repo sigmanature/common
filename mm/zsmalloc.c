@@ -30,7 +30,6 @@
 #include <linux/highmem.h>
 #include <linux/string.h>
 #include <linux/slab.h>
-#include <linux/order0_provenance.h>
 #include <linux/spinlock.h>
 #include <linux/sprintf.h>
 #include <linux/shrinker.h>
@@ -1064,9 +1063,6 @@ static struct zspage *alloc_zspage(struct zs_pool *pool,
 			return NULL;
 		}
 		__zpdesc_set_zsmalloc(zpdesc);
-		if (!order)
-			order0_provenance_record_root(page_folio(zpdesc_page(zpdesc)),
-						      ORDER0_SOURCE_ZSMALLOC);
 
 		zpdesc_inc_zone_page_state(zpdesc);
 		zpdescs[i] = zpdesc;

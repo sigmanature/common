@@ -6,7 +6,6 @@
  */
 
 #include <linux/mm.h>
-#include <linux/order0_provenance.h>
 #include <linux/huge_mm.h>
 #include <linux/init.h>
 #include <linux/moduleparam.h>
@@ -332,7 +331,6 @@ static ssize_t mfill_atomic_pte_order2(pmd_t *dst_pmd,
 	if (!folio) {
 		return 0;
 	}
-	order0_provenance_record_root(folio, ORDER0_SOURCE_UFFD_MFILL);
 
 	if (is_copy) {
 		ret = mfill_atomic_copy_order2_folio(folio, src_addr);
@@ -407,7 +405,6 @@ static int mfill_atomic_pte_copy(pmd_t *dst_pmd,
 					dst_addr);
 		if (!folio)
 			goto out;
-		order0_provenance_record_root(folio, ORDER0_SOURCE_UFFD_MFILL);
 
 		kaddr = kmap_local_folio(folio, 0);
 		/*
@@ -477,7 +474,6 @@ static int mfill_atomic_pte_zeroed_folio(pmd_t *dst_pmd,
 	folio = vma_alloc_zeroed_movable_folio(dst_vma, dst_addr);
 	if (!folio)
 		return ret;
-	order0_provenance_record_root(folio, ORDER0_SOURCE_UFFD_MFILL);
 
 	if (mem_cgroup_charge(folio, dst_vma->vm_mm, GFP_KERNEL))
 		goto out_put;

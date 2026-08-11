@@ -440,8 +440,6 @@ struct folio *__read_swap_cache_async(swp_entry_t entry, gfp_t gfp_mask,
 			new_folio = folio_alloc_mpol(gfp_mask, 0, mpol, ilx, numa_node_id());
 			if (!new_folio)
 				goto put_and_return;
-			order0_provenance_record_root(new_folio,
-					      ORDER0_SOURCE_SWAPIN);
 		}
 
 		/*

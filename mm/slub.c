@@ -40,7 +40,6 @@
 #include <linux/prefetch.h>
 #include <linux/memcontrol.h>
 #include <linux/random.h>
-#include <linux/order0_provenance.h>
 #include <kunit/test.h>
 #include <kunit/test-bug.h>
 #include <linux/sort.h>
@@ -3092,7 +3091,6 @@ static inline struct slab *alloc_slab_page(gfp_t flags, int node,
 
 	if (!folio)
 		return NULL;
-	order0_provenance_record_root(folio, ORDER0_SOURCE_SLAB);
 
 	slab = folio_slab(folio);
 	__folio_set_slab(folio);

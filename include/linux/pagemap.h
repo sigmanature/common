@@ -658,11 +658,7 @@ struct folio *filemap_alloc_folio_noprof(gfp_t gfp, unsigned int order);
 #else
 static inline struct folio *filemap_alloc_folio_noprof(gfp_t gfp, unsigned int order)
 {
-	struct folio *folio = folio_alloc_noprof(gfp, order);
-
-	if (folio)
-		order0_provenance_record_root(folio, ORDER0_SOURCE_FILECACHE);
-	return folio;
+	return folio_alloc_noprof(gfp, order);
 }
 #endif
 

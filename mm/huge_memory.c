@@ -39,7 +39,6 @@
 #include <linux/compat.h>
 #include <linux/pgalloc_tag.h>
 #include <linux/pagewalk.h>
-#include <linux/order0_provenance.h>
 
 #include <asm/tlb.h>
 #include <asm/pgalloc.h>
@@ -4190,10 +4189,8 @@ static unsigned long deferred_split_scan(struct shrinker *shrink,
 	list_for_each_entry_safe(folio, next, &list, _deferred_list) {
 		bool did_split = false;
 		bool underused = false;
-		bool partially_mapped;
 
-		partially_mapped = folio_test_partially_mapped(folio);
-		if (!partially_mapped) {
+		if (!folio_test_partially_mapped(folio)) {
 			/*
 			 * See try_to_map_unused_to_zeropage(): we cannot
 			 * optimize zero-filled pages after splitting an
@@ -4210,8 +4207,6 @@ static unsigned long deferred_split_scan(struct shrinker *shrink,
 		this_cpu_write(folio_split_reason, FSR_DEFERRED);
 		if (!split_folio_to_list(folio, NULL)) {
 			did_split = true;
-			if (partially_mapped)
-				order0_provenance_note_partial_unmap_split();
 			if (underused)
 				count_vm_event(THP_UNDERUSED_SPLIT_PAGE);
 			split++;
