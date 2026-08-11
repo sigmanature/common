@@ -174,9 +174,6 @@ enum zone_stat_item {
 	NR_ZSPAGES,		/* allocated in zsmalloc */
 #endif
 	NR_FREE_CMA_PAGES,
-	NR_PCP_ORDER0_MOVABLE,
-	NR_PCP_ORDER0_UNMOVABLE,
-	NR_PCP_ORDER0_OTHER,
 #ifdef CONFIG_UNACCEPTED_MEMORY
 	NR_UNACCEPTED,
 #endif
