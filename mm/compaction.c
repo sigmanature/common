@@ -1847,9 +1847,7 @@ again:
 		prep_compound_page(&dst->page, order);
 	cc->nr_freepages -= 1 << order;
 	cc->nr_migratepages -= 1 << order;
-	dst = page_rmappable_folio(&dst->page);
-	order0_provenance_record_migration(dst, src);
-	return dst;
+	return page_rmappable_folio(&dst->page);
 }
 
 static struct folio *compaction_alloc(struct folio *src, unsigned long data)
