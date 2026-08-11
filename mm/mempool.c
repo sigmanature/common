@@ -11,7 +11,6 @@
  */
 
 #include <linux/mm.h>
-#include <linux/order0_provenance.h>
 #include <linux/slab.h>
 #include <linux/highmem.h>
 #include <linux/kasan.h>
@@ -653,12 +652,7 @@ EXPORT_SYMBOL(mempool_kvfree);
 void *mempool_alloc_pages(gfp_t gfp_mask, void *pool_data)
 {
 	int order = (int)(long)pool_data;
-	struct page *page = alloc_pages_noprof(gfp_mask, order);
-
-	if (page && !order)
-		order0_provenance_record_root(page_folio(page),
-					      ORDER0_SOURCE_MEMPOOL);
-	return page;
+	return alloc_pages_noprof(gfp_mask, order);
 }
 EXPORT_SYMBOL(mempool_alloc_pages);
 
