@@ -7243,6 +7243,18 @@ static bool pgdat_watermark_boosted(pg_data_t *pgdat, int highest_zoneidx)
 	return false;
 }
 
+static unsigned long count_free_order_pages(struct zone *zone, int target_order)
+{
+	unsigned long count = 0;
+	int free_order;
+
+	for (free_order = target_order; free_order < NR_PAGE_ORDERS; free_order++)
+		count += zone->free_area[free_order].nr_free <<
+			 (free_order - target_order);
+
+	return count;
+}
+
 /*
  * Returns true if there is an eligible zone balanced for the request order
  * and highest_zoneidx
