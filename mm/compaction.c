@@ -1899,7 +1899,7 @@ static unsigned int __read_mostly sysctl_compaction_proactiveness = 20;
 static int sysctl_extfrag_threshold = 500;
 static int __read_mostly sysctl_compact_memory;
 static int sysctl_compaction_order = 2;
-unsigned long sysctl_compact_order2_alloc_wake __read_mostly = 2048;
+unsigned long sysctl_compact_order2_alloc_wake __read_mostly = 0;
 
 unsigned long kcompactd_wake_reasons_bitmap;
 
