@@ -3980,6 +3980,22 @@ try_this_zone:
 			else if (order == 2)
 				count_vm_event(ALLOC_SUCCESS_ORDER2);
 
+			/* Per-type alloc accounting: anon allocations carry __GFP_FS
+			 * (fault path uses GFP_KERNEL/HIGHUSER), file pages (f2fs
+			 * GFP_NOFS mapping) do not. order0 kernel allocations that
+			 * carry __GFP_FS inflate the anon order0 bucket slightly. */
+			if (gfp_mask & __GFP_FS) {
+				if (order == 0)
+					count_vm_event(VMA_ANON_ALLOC_ORDER0_TOTAL);
+				else if (order == 2)
+					count_vm_event(VMA_ANON_ALLOC_ORDER2_TOTAL);
+			} else {
+				if (order == 0)
+					count_vm_event(FILE_ALLOC_ORDER0_TOTAL);
+				else if (order == 2)
+					count_vm_event(FILE_ALLOC_ORDER2_TOTAL);
+			}
+
 			/*
 			 * If this is a high-order atomic allocation then check
 			 * if the pageblock should be reserved for the future

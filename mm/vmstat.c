@@ -18,7 +18,6 @@
 #include <linux/cpu.h>
 #include <linux/cpumask.h>
 #include <linux/vmstat.h>
-#include <linux/order0_provenance.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 #include <linux/debugfs.h>
@@ -1211,9 +1210,6 @@ const char * const vmstat_text[] = {
 	[I(NR_ZSPAGES)]				= "nr_zspages",
 #endif
 	[I(NR_FREE_CMA_PAGES)]			= "nr_free_cma",
-	[I(NR_PCP_ORDER0_MOVABLE)]		= "nr_pcp_order0_movable",
-	[I(NR_PCP_ORDER0_UNMOVABLE)]		= "nr_pcp_order0_unmovable",
-	[I(NR_PCP_ORDER0_OTHER)]			= "nr_pcp_order0_other",
 #ifdef CONFIG_UNACCEPTED_MEMORY
 	[I(NR_UNACCEPTED)]			= "nr_unaccepted",
 #endif
@@ -1486,6 +1482,10 @@ const char * const vmstat_text[] = {
 #endif
 	[I(ALLOC_SUCCESS_ORDER0)]		= "alloc_success_order0",
 	[I(ALLOC_SUCCESS_ORDER2)]		= "alloc_success_order2",
+	[I(VMA_ANON_ALLOC_ORDER0_TOTAL)]	= "vma_anon_alloc_order0_total",
+	[I(VMA_ANON_ALLOC_ORDER2_TOTAL)]	= "vma_anon_alloc_order2_total",
+	[I(FILE_ALLOC_ORDER0_TOTAL)]		= "file_alloc_order0_total",
+	[I(FILE_ALLOC_ORDER2_TOTAL)]		= "file_alloc_order2_total",
 	[I(ALLOC_FAIL_WMARK)]			= "alloc_fail_wmark",
 	[I(ALLOC_FAIL_FRAGMENT)]		= "alloc_fail_fragment",
 	[I(ALLOC_STALL_WMARK)]			= "alloc_stall_wmark",
@@ -2046,7 +2046,6 @@ static int vmstat_show(struct seq_file *m, void *arg)
 		 * breaking userspace which might depend on them being present.
 		 */
 		seq_puts(m, "nr_unstable 0\n");
-		order0_provenance_vmstat_show(m);
 	}
 	return 0;
 }
