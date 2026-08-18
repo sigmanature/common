@@ -36,6 +36,7 @@
 #include <linux/kernel_read_file.h>
 
 #include "zram_drv.h"
+#include "kcompressd.h"
 #include "zram_ioctl.h"
 
 static DEFINE_IDR(zram_index_idr);
@@ -2686,6 +2687,15 @@ static void zram_bio_write(struct zram *zram, struct bio *bio)
 		zram_bio_write_page(zram, bio);
 }
 
+#if defined(CONFIG_KCOMPRESSD) || defined(CONFIG_KCOMPRESSD_MODULE)
+static void zram_bio_write_callback(void *mem, struct bio *bio)
+{
+	struct zram *zram = (struct zram *)mem;
+
+	zram_bio_write(zram, bio);
+}
+#endif
+
 /*
  * Handler function for all zram I/O requests.
  */
@@ -2698,6 +2708,10 @@ static void zram_submit_bio(struct bio *bio)
 		zram_bio_read(zram, bio);
 		break;
 	case REQ_OP_WRITE:
+#if defined(CONFIG_KCOMPRESSD) || defined(CONFIG_KCOMPRESSD_MODULE)
+		if (kcompressd_enabled() && !schedule_bio_write(zram, bio, zram_bio_write_callback))
+			break;
+#endif
 		zram_bio_write(zram, bio);
 		break;
 	case REQ_OP_DISCARD:
@@ -3008,8 +3022,11 @@ static int zram_add(void)
 #if ZRAM_LOGICAL_BLOCK_SIZE == PAGE_SIZE
 		.max_write_zeroes_sectors	= UINT_MAX,
 #endif
-		.features			= BLK_FEAT_STABLE_WRITES |
-						  BLK_FEAT_SYNCHRONOUS,
+		.features			= BLK_FEAT_STABLE_WRITES	|
+						  BLK_FEAT_READ_SYNCHRONOUS
+#if !IS_ENABLED(CONFIG_KCOMPRESSD) && !IS_MODULE(CONFIG_KCOMPRESSD)
+						  | BLK_FEAT_WRITE_SYNCHRONOUS,
+#endif
 	};
 	struct zram *zram;
 	int ret, device_id;
