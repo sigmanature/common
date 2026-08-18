@@ -458,10 +458,10 @@ void __swap_writepage(struct folio *folio, struct swap_iocb **swap_plug)
 		swap_writepage_fs(folio, swap_plug);
 	/*
 	 * ->flags can be updated non-atomicially (scan_swap_map_slots),
-	 * but that will never affect SWP_SYNCHRONOUS_IO, so the data_race
+	 * but that will never affect SWP_WRITE_SYNCHRONOUS_IO, so the data_race
 	 * is safe.
 	 */
-	else if (data_race(sis->flags & SWP_SYNCHRONOUS_IO))
+	else if (data_race(sis->flags & SWP_WRITE_SYNCHRONOUS_IO))
 		swap_writepage_bdev_sync(folio, sis);
 	else
 		swap_writepage_bdev_async(folio, sis);
@@ -609,7 +609,7 @@ static void swap_read_folio_bdev_async(struct folio *folio,
 void swap_read_folio(struct folio *folio, struct swap_iocb **plug)
 {
 	struct swap_info_struct *sis = __swap_entry_to_info(folio->swap);
-	bool synchronous = sis->flags & SWP_SYNCHRONOUS_IO;
+	bool synchronous = sis->flags & SWP_READ_SYNCHRONOUS_IO;
 	bool workingset = folio_test_workingset(folio);
 	unsigned long pflags;
 	bool in_thrashing;

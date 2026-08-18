@@ -1644,7 +1644,7 @@ int zswap_load(struct folio *folio)
 	 * compression work.
 	 *
 	 * (Most swapins go through the swapcache. The notable
-	 * exception is the singleton fault on SWP_SYNCHRONOUS_IO
+	 * exception is the singleton fault on SWP_READ_SYNCHRONOUS_IO
 	 * files, which reads into a private page and may free it if
 	 * the fault fails. We remain the primary owner of the entry.)
 	 */

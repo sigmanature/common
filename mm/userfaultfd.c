@@ -1367,7 +1367,7 @@ static int move_swap_pte(struct mm_struct *mm, struct vm_area_struct *dst_vma,
 		 * same entry before the PTE check above. The PTL is acquired and released
 		 * twice, each time after updating the swap_map's flag. So holding
 		 * the PTL here ensures we see the updated value. False positive is possible,
-		 * e.g. SWP_SYNCHRONOUS_IO swapin may set the flag without touching the
+		 * e.g. SWP_READ_SYNCHRONOUS_IO swapin may set the flag without touching the
 		 * cache, or during the tiny synchronization window between swap cache and
 		 * swap_map, but it will be gone very quickly, worst result is retry jitters.
 		 */

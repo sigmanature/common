@@ -216,7 +216,8 @@ enum {
 	SWP_AREA_DISCARD = (1 << 9),	/* single-time swap area discards */
 	SWP_PAGE_DISCARD = (1 << 10),	/* freed swap page-cluster discards */
 	SWP_STABLE_WRITES = (1 << 11),	/* no overwrite PG_writeback pages */
-	SWP_SYNCHRONOUS_IO = (1 << 12),	/* synchronous IO is efficient */
+	SWP_READ_SYNCHRONOUS_IO = (1 << 12),	/* synchronous read IO is efficient */
+	SWP_WRITE_SYNCHRONOUS_IO = (1 << 13),	/* synchronous write IO is efficient */
 					/* add others here before... */
 };
 
@@ -350,7 +351,7 @@ void folio_mark_accessed(struct folio *);
 
 static inline bool folio_may_be_lru_cached(struct folio *folio)
 {
-	DECLARE_STATIC_KEY_TRUE(lru_cache_large_folios_key);
+	DECLARE_STATIC_KEY_FALSE(lru_cache_large_folios_key);
 
 	/*
 	 * Holding PMD-sized folios in per-CPU LRU cache unbalances accounting.
