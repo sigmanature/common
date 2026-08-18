@@ -128,7 +128,6 @@
 #include <linux/blk-cgroup.h>
 #include <linux/fadvise.h>
 #include <linux/sched/mm.h>
-#include <linux/mthp_alloc_counter.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/readahead.h>
@@ -137,6 +136,15 @@
 
 unsigned int readahead_min_order = 0;
 EXPORT_SYMBOL(readahead_min_order);
+
+/*
+ * When set via kernel cmdline (fs_disable_large_folio=1), file folios are
+ * forced to order 0: readahead falls back to 4K and f2fs/ext4 never enable
+ * large folios (inode mapping order and sbi caps clamped to 0).
+ */
+unsigned int fs_disable_large_folio = 0;
+EXPORT_SYMBOL(fs_disable_large_folio);
+core_param(fs_disable_large_folio, fs_disable_large_folio, uint, 0644);
 
 /*
  * Initialise a struct file's readahead state.  Assumes that the caller has
@@ -190,8 +198,7 @@ static struct folio *ractl_alloc_folio(struct readahead_control *ractl,
 {
 	struct folio *folio;
 
-	folio = mthp_file_alloc_folio_counted(gfp_mask, order,
-					    MTHP_FILE_ALLOC_READAHEAD);
+	folio = filemap_alloc_folio(gfp_mask, order);
 	if (folio && ractl->dropbehind)
 		__folio_set_dropbehind(folio);
 

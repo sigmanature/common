@@ -140,6 +140,8 @@ static ssize_t ext4_min_folio_order_cap_store(struct kobject *kobj,
 	ret = kstrtoul(skip_spaces(buf), 0, &t);
 	if (ret)
 		return ret;
+	if (fs_disable_large_folio && t)
+		return -EPERM;
 	if (t > MAX_PAGECACHE_ORDER)
 		return -EINVAL;
 
@@ -165,6 +167,8 @@ static ssize_t ext4_max_folio_order_cap_store(struct kobject *kobj,
 	ret = kstrtoul(skip_spaces(buf), 0, &t);
 	if (ret)
 		return ret;
+	if (fs_disable_large_folio && t)
+		return -EPERM;
 	if (t > MAX_PAGECACHE_ORDER)
 		return -EINVAL;
 

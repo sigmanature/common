@@ -5174,6 +5174,9 @@ void ext4_set_inode_mapping_order(struct inode *inode)
 	unsigned int min_order;
 	unsigned int max_order;
 
+	if (fs_disable_large_folio)
+		return;
+
 	if (!ext4_should_enable_large_folio(inode))
 		return;
 

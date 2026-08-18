@@ -8,6 +8,8 @@
 #ifndef _LINUX_F2FS_H
 #define _LINUX_F2FS_H
 
+extern unsigned int fs_disable_large_folio;
+
 #include <linux/uio.h>
 #include <linux/types.h>
 #include <linux/page-flags.h>
@@ -5014,6 +5016,9 @@ static inline void f2fs_set_inode_mapping_order(struct inode *inode)
 {
 	unsigned int min_order;
 	unsigned int max_order;
+
+	if (fs_disable_large_folio)
+		return;
 
 	if (!f2fs_inode_may_use_large_folio(inode))
 		return;

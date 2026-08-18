@@ -575,6 +575,8 @@ out:
 
 	if (!strcmp(a->attr.name, "min_folio_order_cap") ||
 	    !strcmp(a->attr.name, "max_folio_order_cap")) {
+		if (fs_disable_large_folio && t)
+			return -EPERM;
 		if (t > 4)
 			return -EINVAL;
 		*ui = (unsigned int)t;

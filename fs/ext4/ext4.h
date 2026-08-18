@@ -17,6 +17,8 @@
 #ifndef _EXT4_H
 #define _EXT4_H
 
+extern unsigned int fs_disable_large_folio;
+
 #include <linux/refcount.h>
 #include <linux/types.h>
 #include <linux/blkdev.h>
