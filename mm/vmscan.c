@@ -747,6 +747,8 @@ static inline bool can_reclaim_anon_pages(struct mem_cgroup *memcg,
 		 */
 		if (get_nr_swap_pages() > 0)
 			return true;
+		trace_printk("can_reclaim_anon swap_FULL nr_swap=%lu",
+			     get_nr_swap_pages());
 	} else {
 		/* Is the memcg below its swap limit? */
 		if (mem_cgroup_get_nr_swap_pages(memcg) > 0)
@@ -2450,6 +2452,9 @@ static unsigned long shrink_inactive_list(unsigned long nr_to_scan,
 		__count_vm_events(item, nr_scanned);
 	count_memcg_events(lruvec_memcg(lruvec), item, nr_scanned);
 	__count_vm_events(PGSCAN_ANON + file, nr_scanned);
+	if (nr_scanned > 0)
+		trace_printk("shrink_one lru=%s scanned=%lu",
+			     file ? "file" : "anon", (unsigned long)nr_scanned);
 
 	spin_unlock_irq(&lruvec->lru_lock);
 
@@ -2470,6 +2475,9 @@ static unsigned long shrink_inactive_list(unsigned long nr_to_scan,
 		__count_vm_events(item, nr_reclaimed);
 	count_memcg_events(lruvec_memcg(lruvec), item, nr_reclaimed);
 	__count_vm_events(PGSTEAL_ANON + file, nr_reclaimed);
+	if (nr_reclaimed > 0)
+		trace_printk("shrink_one lru=%s reclaimed=%lu",
+			     file ? "file" : "anon", (unsigned long)nr_reclaimed);
 	{
 		int r_off = reclaimer_offset(sc);
 
@@ -2987,6 +2995,8 @@ static void get_scan_count(struct lruvec *lruvec, struct scan_control *sc,
 	/* If we have no swap space, do not bother scanning anon folios. */
 	if (!sc->may_swap || !can_reclaim_anon_pages(memcg, pgdat->node_id, sc)) {
 		scan_balance = SCAN_FILE;
+		trace_printk("gsc SB=FILE reason=no_swap_anon swap=%lu",
+			     get_nr_swap_pages());
 		goto out;
 	}
 
@@ -3036,11 +3046,15 @@ static void get_scan_count(struct lruvec *lruvec, struct scan_control *sc,
 	 */
 	if (!balance_anon_file_reclaim && sc->cache_trim_mode) {
 		scan_balance = SCAN_FILE;
+		trace_printk("gsc SB=FILE reason=cache_trim_mode swappiness=%d",
+			     swappiness);
 		goto out;
 	}
 
 	scan_balance = SCAN_FRACT;
 	calculate_pressure_balance(sc, swappiness, fraction, &denominator);
+	trace_printk("gsc SB=FRACT swappiness=%d cache_trim=%d",
+		     swappiness, sc->cache_trim_mode);
 
 out:
 	for_each_evictable_lru(lru) {
