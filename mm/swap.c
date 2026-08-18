@@ -1094,7 +1094,7 @@ void folio_batch_remove_exceptionals(struct folio_batch *fbatch)
 	fbatch->nr = j;
 }
 
-DEFINE_STATIC_KEY_TRUE(lru_cache_large_folios_key);
+DEFINE_STATIC_KEY_FALSE(lru_cache_large_folios_key);
 
 static const struct ctl_table swap_sysctl_table[] = {
 	{
