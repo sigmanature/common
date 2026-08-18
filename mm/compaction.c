@@ -33,6 +33,7 @@ int kfragd_frag_high = 70;
 int kfragd_frag_low = 30;
 int kfragd_reclaim_batch = 2048;
 int kfragd_interval_ms = 500;
+int kfragd_force_reclaim;
 
 static struct task_struct *kfragd_thread[MAX_NUMNODES];
 /*
@@ -133,6 +134,7 @@ static unsigned long release_free_list(struct list_head *freepages)
  */
 static void defer_compaction(struct zone *zone, int order)
 {
+	/* kleaf-local-incremental-test: 无行为变更的注释修改，验证增量构建 */
 	zone->compact_considered = 0;
 	zone->compact_defer_shift++;
 
@@ -561,6 +563,71 @@ static bool compact_unlock_should_abort(spinlock_t *lock,
  * returning 0 on any invalid PFNs or non-free pages inside of the pageblock
  * (even though it may still end up isolating some pages).
  */
+static int sysctl_compaction_order = 2;
+#define for_each_managed_zone_pgdat(zone, pgdat, idx, highidx)  \
+	for ((idx) = 0, (zone) = (pgdat)->node_zones;           \
+	    (idx) <= (highidx);                                 \
+	    (idx)++, (zone)++)                                  \
+		if (!managed_zone(zone))                        \
+			continue;                               \
+		else
+
+static unsigned long kfragd_movable_free_below(pg_data_t *pgdat, int highest_zoneidx)
+{
+	unsigned long movable_free_below = 0;
+	struct zone *zone;
+	int i, o;
+
+	for_each_managed_zone_pgdat(zone, pgdat, i, highest_zoneidx) {
+		for (o = 0; o < sysctl_compaction_order; o++)
+			movable_free_below +=
+				zone->free_area[o].mt_nr_free[MIGRATE_MOVABLE] << o;
+	}
+
+	return movable_free_below;
+}
+
+/*
+ * kfragd/kcompactd round counters for trace correlation.
+ * kround: one kfragd enter->exit loop; cround: one compact_node execution,
+ * globally increasing so even non-kfragd-triggered cnodes get unique ids.
+ */
+static unsigned int kfragd_round_id;
+static unsigned int kcompactd_round_id;
+
+/* Single-zone movable free below sysctl_compaction_order (order0+order1) */
+static unsigned long zone_movable_free_below(struct zone *zone)
+{
+	unsigned long movable_free_below = 0;
+	int o;
+
+	for (o = 0; o < sysctl_compaction_order; o++)
+		movable_free_below +=
+			zone->free_area[o].mt_nr_free[MIGRATE_MOVABLE] << o;
+
+	return movable_free_below;
+}
+
+/* Single-zone movable free at order 0 */
+static unsigned long zone_movable_free_order0(struct zone *zone)
+{
+	return zone->free_area[0].mt_nr_free[MIGRATE_MOVABLE];
+}
+
+/* Node-wide movable free at order 0 (all managed zones) */
+static unsigned long kfragd_movable_free_order0(pg_data_t *pgdat,
+						int highest_zoneidx)
+{
+	unsigned long movable_free_o0 = 0;
+	struct zone *zone;
+	int i;
+
+	for_each_managed_zone_pgdat(zone, pgdat, i, highest_zoneidx)
+		movable_free_o0 += zone->free_area[0].mt_nr_free[MIGRATE_MOVABLE];
+
+	return movable_free_o0;
+}
+
 static unsigned long isolate_freepages_block(struct compact_control *cc,
 				unsigned long *start_pfn,
 				unsigned long end_pfn,
@@ -667,6 +734,14 @@ isolate_fail:
 
 	trace_mm_compaction_isolate_freepages(*start_pfn, blockpfn,
 					nr_scanned, total_isolated);
+	trace_printk("%s kround=%u cround=%u zone=%s zfree_below=%lu zfree_o0=%lu nfree_below=%lu nfree_o0=%lu\n",
+			__func__, READ_ONCE(kfragd_round_id), READ_ONCE(kcompactd_round_id),
+			cc->zone->name, zone_movable_free_below(cc->zone),
+			zone_movable_free_order0(cc->zone),
+			kfragd_movable_free_below(cc->zone->zone_pgdat,
+						  cc->zone->zone_pgdat->nr_zones - 1),
+			kfragd_movable_free_order0(cc->zone->zone_pgdat,
+						   cc->zone->zone_pgdat->nr_zones - 1));
 
 	/* Record how far we have got within the block */
 	*start_pfn = blockpfn;
@@ -815,7 +890,12 @@ static bool skip_isolation_on_order(int order, int target_order)
 	 * the desired target_order, so migrating this folio would likely fail
 	 * later.
 	 */
-	if (!is_via_compact_memory(target_order) && order >= target_order)
+	if (is_via_compact_memory(target_order)) {
+		int filter = sysctl_compaction_order ? : COMPACTION_HPAGE_ORDER;
+		return order >= filter;
+	}
+
+	if (order >= target_order)
 		return true;
 	/*
 	 * We limit memory compaction to pageblocks and won't try
@@ -1895,13 +1975,12 @@ static int sysctl_compact_unevictable_allowed __read_mostly = CONFIG_COMPACT_UNE
  * aggressively the kernel should compact memory in the
  * background. It takes values in the range [0, 100].
  */
-static unsigned int __read_mostly sysctl_compaction_proactiveness = 20;
-static int sysctl_extfrag_threshold = 500;
-static int __read_mostly sysctl_compact_memory;
-static int sysctl_compaction_order = 2;
-unsigned long sysctl_compact_order2_alloc_wake __read_mostly = 0;
+ static unsigned int __read_mostly sysctl_compaction_proactiveness = 20;
+ static int sysctl_extfrag_threshold = 500;
+ static int __read_mostly sysctl_compact_memory;
+ unsigned long sysctl_compact_order2_alloc_wake __read_mostly = 0;
 
-unsigned long kcompactd_wake_reasons_bitmap;
+ unsigned long kcompactd_wake_reasons_bitmap;
 
 static inline void
 update_fast_start_pfn(struct compact_control *cc, unsigned long pfn)
@@ -2276,12 +2355,12 @@ static enum compact_result __compact_finished(struct compact_control *cc)
 		pg_data_t *pgdat;
 
 		pgdat = cc->zone->zone_pgdat;
-		if (kswapd_is_running(pgdat))
-			return COMPACT_PARTIAL_SKIPPED;
-
 		/* Externally triggered: only stop when scanners meet */
 		if (pgdat->proactive_compact_trigger)
 			return COMPACT_CONTINUE;
+
+		if (kswapd_is_running(pgdat))
+			return COMPACT_PARTIAL_SKIPPED;
 
 		score = fragmentation_score_zone(cc->zone,
 			sysctl_compaction_order ? : COMPACTION_HPAGE_ORDER);
@@ -2342,7 +2421,7 @@ static enum compact_result __compact_finished(struct compact_control *cc)
 		 * Job done if allocation would steal freepages from
 		 * other migratetype buddy lists.
 		 */
-		if (find_suitable_fallback(area, order, migratetype, true) >= 0)
+		if (find_suitable_fallback(area, order, migratetype, true) >= 0) {
 			/*
 			 * Movable pages are OK in any pageblock. If we are
 			 * stealing for a non-movable allocation, make sure
@@ -2352,6 +2431,7 @@ static enum compact_result __compact_finished(struct compact_control *cc)
 			 * have to steal another one soon.
 			 */
 			return COMPACT_SUCCESS;
+		}
 	}
 
 out:
@@ -3204,25 +3284,11 @@ static bool kfragd_target_met(pg_data_t *pgdat)
 	return score <= kfragd_frag_low;
 }
 
-#define for_each_managed_zone_pgdat(zone, pgdat, idx, highidx)  \
-	for ((idx) = 0, (zone) = (pgdat)->node_zones;           \
-	    (idx) <= (highidx);                                 \
-	    (idx)++, (zone)++)                                  \
-		if (!managed_zone(zone))                        \
-			continue;                               \
-		else
-
 static bool kfragd_need_reclaim(pg_data_t *pgdat, int highest_zoneidx)
 {
-	unsigned long movable_free_below = 0;
-	struct zone *zone;
-	int i, o;
+	unsigned long movable_free_below;
 
-	for_each_managed_zone_pgdat(zone, pgdat, i, highest_zoneidx) {
-		for (o = 0; o < sysctl_compaction_order; o++)
-			movable_free_below +=
-				zone->free_area[o].mt_nr_free[MIGRATE_MOVABLE] << o;
-	}
+	movable_free_below = kfragd_movable_free_below(pgdat, highest_zoneidx);
 
 	/*
 	 * If MOVABLE free pages below target order < compact_gap worth,
@@ -3253,8 +3319,20 @@ static int kfragd(void *p)
 		 * If fragmentation exceeds high watermark,
 		 * start compact + reclaim feedback loop.
 		 */
+		WRITE_ONCE(kfragd_round_id, READ_ONCE(kfragd_round_id) + 1);
+		trace_printk("kfragd%d kround=%u enter score=%u\n",
+				pgdat->node_id, READ_ONCE(kfragd_round_id),
+				fragmentation_score_node(pgdat, sysctl_compaction_order));
 		while (!kthread_should_stop() && !kfragd_target_met(pgdat)) {
 			/* Step 1: Wake kcompactd to do compaction */
+			trace_printk("kfragd%d kround=%u iter_start movable_free=%lu o0=%lu score=%u\n",
+					pgdat->node_id, READ_ONCE(kfragd_round_id),
+					kfragd_movable_free_below(pgdat,
+							   highest_zoneidx),
+					kfragd_movable_free_order0(pgdat,
+							   highest_zoneidx),
+					fragmentation_score_node(pgdat,
+						sysctl_compaction_order));
 			pgdat->proactive_compact_trigger = true;
 			wake_up_interruptible(&pgdat->kcompactd_wait);
 
@@ -3270,14 +3348,33 @@ static int kfragd(void *p)
 			 * Do global reclaim to free up pages
 			 * as compaction workspace.
 			 */
-			if (kfragd_need_reclaim(pgdat, highest_zoneidx)) {
-				try_to_free_mem_cgroup_pages(NULL,
+			if (kfragd_force_reclaim ||
+			    kfragd_need_reclaim(pgdat, highest_zoneidx)) {
+				unsigned long below, reclaimed;
+				below = kfragd_movable_free_below(pgdat,
+							   highest_zoneidx);
+				trace_printk("kfragd%d kround=%u reclaim_before force=%d movable_free=%lu\n",
+						pgdat->node_id, READ_ONCE(kfragd_round_id),
+						kfragd_force_reclaim, below);
+				reclaimed = try_to_free_mem_cgroup_pages(NULL,
 						kfragd_reclaim_batch,
-						GFP_KERNEL, MEMCG_RECLAIM_MAY_SWAP, NULL);
+						GFP_KERNEL, MEMCG_RECLAIM_MAY_SWAP,
+						NULL);
+				trace_printk(
+					"kfragd%d kround=%u reclaim_after force=%d reclaimed=%lu movable_free=%lu score=%u\n",
+					pgdat->node_id, READ_ONCE(kfragd_round_id),
+					kfragd_force_reclaim, reclaimed,
+					kfragd_movable_free_below(pgdat,
+							   highest_zoneidx),
+					fragmentation_score_node(pgdat,
+						sysctl_compaction_order));
 			}
 			/* Brief yield before next compact attempt */
 			cond_resched();
 		}
+		trace_printk("kfragd%d kround=%u exit score=%u\n",
+				pgdat->node_id, READ_ONCE(kfragd_round_id),
+				fragmentation_score_node(pgdat, sysctl_compaction_order));
 	}
 
 	return 0;
@@ -3346,11 +3443,22 @@ static int kcompactd(void *p)
 			unsigned int prev_score, score;
 			unsigned int order = sysctl_compaction_order ? : COMPACTION_HPAGE_ORDER;
 
+			WRITE_ONCE(kcompactd_round_id, READ_ONCE(kcompactd_round_id) + 1);
 			prev_score = fragmentation_score_node(pgdat, order);
-			trace_printk("##### prev_score = %d #####\n", prev_score);
+			trace_printk("kcompactd kround=%u cround=%u cnode_start score=%d movable_free=%lu o0=%lu\n",
+					READ_ONCE(kfragd_round_id), READ_ONCE(kcompactd_round_id), prev_score,
+					kfragd_movable_free_below(pgdat,
+							   pgdat->nr_zones - 1),
+					kfragd_movable_free_order0(pgdat,
+							   pgdat->nr_zones - 1));
 			compact_node(pgdat, true);
 			score = fragmentation_score_node(pgdat, order);
-			trace_printk("##### after_score = %d #####\n", score);
+			trace_printk("kcompactd kround=%u cround=%u cnode_end score=%d movable_free=%lu o0=%lu\n",
+					READ_ONCE(kfragd_round_id), READ_ONCE(kcompactd_round_id), score,
+					kfragd_movable_free_below(pgdat,
+							   pgdat->nr_zones - 1),
+					kfragd_movable_free_order0(pgdat,
+							   pgdat->nr_zones - 1));
 			/*
 			 * Defer proactive compaction if the fragmentation
 			 * score did not go down i.e. no progress made.
@@ -3506,6 +3614,15 @@ static const struct ctl_table vm_compaction[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= SYSCTL_ONE,
+	},
+	{
+		.procname	= "kfragd_force_reclaim",
+		.data		= &kfragd_force_reclaim,
+		.maxlen		= sizeof(kfragd_force_reclaim),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= SYSCTL_ONE,
 	},
 	{
 		.procname	= "compact_order2_alloc_wake",
