@@ -34,6 +34,16 @@
 #include <trace/events/power.h>
 #include <trace/hooks/cpufreq.h>
 
+/*
+ * Explicit frequency lock (global_freq_lock): 0 = disabled; >0 = locked
+ * frequency in kHz. While locked, every other frequency setter is ignored
+ * (userspace scaling_*, thermal cooling, perfmgr hints, PM QoS, governor
+ * requests). The lock is set via sysfs
+ * /sys/devices/system/cpu/cpuN/cpufreq/global_freq_lock; write 0 to unlock.
+ * Cooling phases can lock to cpuinfo_min for the fastest temperature drop.
+ */
+DEFINE_PER_CPU(unsigned int, cpu_freq_lock);
+
 static LIST_HEAD(cpufreq_policy_list);
 
 /* Macros to iterate over CPU policies */
@@ -962,6 +972,40 @@ static ssize_t show_bios_limit(struct cpufreq_policy *policy, char *buf)
 	return sysfs_emit(buf, "%u\n", policy->cpuinfo.max_freq);
 }
 
+/*
+ * Explicit frequency lock sysfs: cpuN/cpufreq/global_freq_lock
+ * Read: current lock value (0 = unlocked).
+ * Write: lock value in kHz (must be within cpuinfo range) or 0 to unlock.
+ * The policy is refreshed in-place right away (set_policy applies the
+ * override); cpufreq_update_policy() is avoided because the outer store()
+ * already holds the policy write lock.
+ */
+static ssize_t show_global_freq_lock(struct cpufreq_policy *policy, char *buf)
+{
+	return sysfs_emit(buf, "%u\n", per_cpu(cpu_freq_lock, policy->cpu));
+}
+
+static ssize_t store_global_freq_lock(struct cpufreq_policy *policy,
+				      const char *buf, size_t count)
+{
+	unsigned int lock;
+	int ret;
+
+	ret = kstrtouint(buf, 10, &lock);
+	if (ret)
+		return ret;
+
+	if (lock &&
+	    (lock < policy->cpuinfo.min_freq || lock > policy->cpuinfo.max_freq))
+		return -EINVAL;
+
+	per_cpu(cpu_freq_lock, policy->cpu) = lock;
+	refresh_frequency_limits(policy);
+
+	return count;
+}
+cpufreq_freq_attr_rw(global_freq_lock);
+
 cpufreq_freq_attr_ro_perm(cpuinfo_cur_freq, 0400);
 cpufreq_freq_attr_ro(cpuinfo_avg_freq);
 cpufreq_freq_attr_ro(cpuinfo_min_freq);
@@ -991,6 +1035,7 @@ static struct attribute *cpufreq_attrs[] = {
 	&scaling_driver.attr,
 	&scaling_available_governors.attr,
 	&scaling_setspeed.attr,
+	&global_freq_lock.attr,
 	NULL
 };
 ATTRIBUTE_GROUPS(cpufreq);
@@ -2216,6 +2261,14 @@ unsigned int cpufreq_driver_fast_switch(struct cpufreq_policy *policy,
 	unsigned int freq;
 	int cpu;
 
+	/* explicit freq lock: clamp fast-switch requests while locked */
+	{
+		unsigned int lock = per_cpu(cpu_freq_lock, policy->cpu);
+
+		if (lock)
+			target_freq = min(target_freq, lock);
+	}
+
 	target_freq = clamp_val(target_freq, policy->min, policy->max);
 	freq = cpufreq_driver->fast_switch(policy, target_freq);
 
@@ -2370,6 +2423,14 @@ int __cpufreq_driver_target(struct cpufreq_policy *policy,
 
 	if (cpufreq_disabled())
 		return -ENODEV;
+
+	/* explicit freq lock: clamp target requests while locked */
+	{
+		unsigned int lock = per_cpu(cpu_freq_lock, policy->cpu);
+
+		if (lock)
+			target_freq = min(target_freq, lock);
+	}
 
 	target_freq = __resolve_freq(policy, target_freq, policy->min,
 				     policy->max, relation);
@@ -2661,14 +2722,20 @@ static int cpufreq_set_policy(struct cpufreq_policy *policy,
 		return ret;
 
 	/*
-	 * Resolve policy min/max to available frequencies. It ensures
-	 * no frequency resolution will neither overshoot the requested maximum
-	 * nor undershoot the requested minimum.
-	 *
-	 * Avoid storing intermediate values in policy->max or policy->min and
-	 * compiler optimizations around them because they may be accessed
-	 * concurrently by cpufreq_driver_resolve_freq() during the update.
+	 * Explicit freq lock: while locked, override every policy update
+	 * source (userspace scaling_*, thermal cooling, perfmgr hints,
+	 * PM QoS) so that min = max = lock. Unlock (lock=0) restores the
+	 * aggregated QoS values.
 	 */
+	{
+		unsigned int lock = per_cpu(cpu_freq_lock, policy->cpu);
+
+		if (lock) {
+			new_data.min = lock;
+			new_data.max = lock;
+		}
+	}
+
 	WRITE_ONCE(policy->max, __resolve_freq(policy, new_data.max,
 					       new_data.min, new_data.max,
 					       CPUFREQ_RELATION_H));
