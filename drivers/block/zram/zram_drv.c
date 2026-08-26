@@ -2709,8 +2709,23 @@ static void zram_submit_bio(struct bio *bio)
 		break;
 	case REQ_OP_WRITE:
 #if defined(CONFIG_KCOMPRESSD) || defined(CONFIG_KCOMPRESSD_MODULE)
-		if (kcompressd_enabled() && !schedule_bio_write(zram, bio, zram_bio_write_callback))
+		if (kcompressd_enabled() &&
+		    !schedule_bio_write(zram, bio, zram_bio_write_callback)) {
+			/*
+			 * The bio was queued to kcompressd and this function
+			 * returns immediately; MADV_DONTNEED on the next round
+			 * will not free the swap cache folio while it is
+			 * writeback-pending. Mark it dropbehind so that once
+			 * kcompressd completes the writeback, the swap cache
+			 * entry and the swap slot are freed promptly instead
+			 * of accumulating.
+			 */
+			struct folio *folio =
+				page_folio(bio_first_bvec_all(bio)->bv_page);
+
+			folio_set_dropbehind(folio);
 			break;
+		}
 #endif
 		zram_bio_write(zram, bio);
 		break;

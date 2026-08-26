@@ -17,6 +17,15 @@ struct kcompress {
 	wait_queue_head_t kcompressd_wait;
 	struct kfifo write_fifo;
 	atomic_t running;
+	/*
+	 * Producer serialization gate for the SPSC kfifo.
+	 *
+	 * kfifo is only safe for a single producer; schedule_bio_write() may
+	 * be called concurrently from any direct-reclaim / shmem-writeback
+	 * context, so producers must serialize the "check space + copy entry"
+	 * critical section. 1 = a producer holds the gate (queuing in
+	 * progress); 0 = free. Consumers (kcompressd) do not touch it.
+	 */
 	atomic_t producer_busy;
 };
 

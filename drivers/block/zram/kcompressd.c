@@ -354,25 +354,45 @@ int schedule_bio_write(void *mem, struct bio *bio, compress_callback cb)
 	if (unlikely(!atomic_read(&enable_kcompressd)))
 		return -EBUSY;
 
+	/*
+	 * Inverted from the original upstream restriction: the upstream patch
+	 * only allowed kswapd to submit async work (current_is_kswapd()).
+	 * We now *block* kswapd and only let direct reclaim (MADV_PAGEOUT,
+	 * allocation-failure reclaim) and shmem writeback use kcompressd.
+	 *
+	 * Those producers are still concurrent: any process in direct reclaim,
+	 * plus the shmem wb_workfn writeback thread, may call into
+	 * schedule_bio_write() from different CPUs at the same time. kfifo is
+	 * an SPSC queue (safe only for one producer), so the producer_busy
+	 * gate below serializes the "check space + kfifo_in" critical section:
+	 *
+	 *   atomic_cmpxchg_acquire(0 -> 1):  try to take the gate. Success
+	 *     means we hold the queue exclusively; failure means another
+	 *     producer is mid-enqueue, so try the next kcompressd queue.
+	 *   atomic_set_release(0):          drop the gate after kfifo_in.
+	 *     The release ordering guarantees our entry copy is visible
+	 *     before the next producer (or a woken consumer) proceeds.
+	 *
+	 * If every queue is busy or full, fall back to synchronous
+	 * compression (the caller's zram_bio_write path).
+	 */
+	if (current_is_kswapd())
+		return -EBUSY;
+
 	bio_get(bio);
 
 	for (i = 0; i < nr_kcompressd; i++) {
-		/*
-		 * kfifo is an unbounded-optimized SPSC queue: safe with a single
-		 * concurrent writer per fifo. schedule_bio_write() may now be
-		 * entered from any reclaim context (kswapd, direct reclaim,
-		 * MADV_PAGEOUT), so serialize producers with a CAS gate.
-		 * A producer that loses the CAS does not spin: it falls back to
-		 * the synchronous compress path via -EBUSY, matching the
-		 * existing "async when possible, sync as fallback" design.
-		 */
-		if (atomic_cmpxchg_acquire(&kcompress[i].producer_busy, 0, 1))
+		/* Take the producer gate for queue i (skip if held). */
+		if (atomic_cmpxchg_acquire(&kcompress[i].producer_busy,
+					   0, 1))
 			continue;
 
 		submit_success =
 			(kfifo_avail(&kcompress[i].write_fifo) >= sz_work) &&
-			(sz_work == kfifo_in(&kcompress[i].write_fifo, &entry, sz_work));
+			(sz_work == kfifo_in(&kcompress[i].write_fifo,
+					      &entry, sz_work));
 
+		/* Enqueue done: release the gate. */
 		atomic_set_release(&kcompress[i].producer_busy, 0);
 
 		if (submit_success) {
@@ -417,7 +437,11 @@ static int __init kcompressd_init(void)
 	}
 
 	atomic_set(&enable_kcompressd, sysctl_kcompressd_enabled);
-	kcompressd_sysctl_header = register_sysctl("vm", kcompressd_sysctls);
+	/* register_sysctl() 展开为 register_sysctl_sz(..., ARRAY_SIZE(table))——
+	 * 数组含 {} 空终止符导致 size=2 注册失败（空条目 procname=NULL）。
+	 * 用 register_sysctl_sz 精确传实际条目数（去掉空终止符）。 */
+	kcompressd_sysctl_header = register_sysctl_sz(
+		"vm", kcompressd_sysctls, ARRAY_SIZE(kcompressd_sysctls) - 1);
 	pr_info("kcompressd: sysctl header %s\n",
 		kcompressd_sysctl_header ? "registered" : "REGISTER FAILED");
 	blocking_notifier_call_chain(&kcompressd_notifier_list, 0, NULL);
