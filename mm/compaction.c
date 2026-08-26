@@ -1978,9 +1978,7 @@ static int sysctl_compact_unevictable_allowed __read_mostly = CONFIG_COMPACT_UNE
  static unsigned int __read_mostly sysctl_compaction_proactiveness = 20;
  static int sysctl_extfrag_threshold = 500;
  static int __read_mostly sysctl_compact_memory;
- unsigned long sysctl_compact_order2_alloc_wake __read_mostly = 0;
 
- unsigned long kcompactd_wake_reasons_bitmap;
 
 static inline void
 update_fast_start_pfn(struct compact_control *cc, unsigned long pfn)
@@ -3411,14 +3409,6 @@ static int kcompactd(void *p)
 			!pgdat->proactive_compact_trigger) {
 
 			count_vm_event(KCOMPACTD_WAKE_REQUEST);
-			{
-				unsigned long reasons = xchg(
-					&kcompactd_wake_reasons_bitmap, 0);
-				if (reasons & BIT(KCOMPACTD_WAKE_REASON_ALLOC))
-					count_vm_event(KCOMPACTD_WOKE_BY_ALLOC);
-				if (reasons & BIT(KCOMPACTD_WAKE_REASON_VMSCAN))
-					count_vm_event(KCOMPACTD_WOKE_BY_VMSCAN);
-			}
 			psi_memstall_enter(&pflags);
 			kcompactd_do_work(pgdat);
 			psi_memstall_leave(&pflags);
@@ -3623,13 +3613,6 @@ static const struct ctl_table vm_compaction[] = {
 		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= SYSCTL_ZERO,
 		.extra2		= SYSCTL_ONE,
-	},
-	{
-		.procname	= "compact_order2_alloc_wake",
-		.data		= &sysctl_compact_order2_alloc_wake,
-		.maxlen		= sizeof(unsigned long),
-		.mode		= 0644,
-		.proc_handler	= proc_doulongvec_minmax,
 	},
 };
 

@@ -64,8 +64,6 @@
 #include "shuffle.h"
 #include "page_reporting.h"
 
-/* Proactive kswapd wakeup threshold for order-2 (defined in mm/vmscan.c). */
-extern int kswapd_order2_wakeup_threshold;
 
 /* Free Page Internal flags: for internal, non-pcp variants of free_pages(). */
 typedef int __bitwise fpi_t;
@@ -1732,31 +1730,10 @@ static __always_inline void page_del_and_expand(struct zone *zone,
 						int high, int migratetype)
 {
 	int nr_pages = 1 << high;
-	unsigned long threshold = 0;
-	unsigned long pre_free = 0;
-	unsigned long post_free;
-	bool trace_cross = false;
-
-	if (trace_mm_order2_buddy_alloc_cross_enabled()) {
-		threshold = READ_ONCE(kswapd_order2_wakeup_threshold);
-		if (threshold) {
-			pre_free = zone_free_order2_equiv(zone);
-			trace_cross = pre_free >= threshold;
-		}
-	}
 
 	__del_page_from_free_list(page, zone, high, migratetype);
 	nr_pages -= expand(zone, page, low, high, migratetype);
 	account_freepages(zone, -nr_pages, migratetype);
-
-	if (trace_cross) {
-		post_free = zone_free_order2_equiv(zone);
-		if (post_free < threshold)
-			trace_mm_order2_buddy_alloc_cross(zone->zone_pgdat->node_id,
-							   zone_idx(zone), pre_free,
-							   post_free, threshold, low,
-							   high, migratetype);
-	}
 }
 
 static void check_new_page_bad(struct page *page)
@@ -3643,7 +3620,8 @@ bool __zone_watermark_ok_raw(struct zone *z, unsigned int order, unsigned long m
 		}
 	}
 	if (direct_reclaim) {
-		trace_alloc_stall_fragment(z, order, alloc_flags);
+		trace_alloc_stall_fragment(z, order, alloc_flags, free_pages,
+					   mark, z->lowmem_reserve[highest_zoneidx]);
 		count_vm_event(ALLOC_FAIL_FRAGMENT);
 		__this_cpu_write(last_alloc_stall_reason,
 				 ALLOC_STALL_REASON_FRAGMENT);
@@ -3938,38 +3916,6 @@ check_alloc_wmark:
 		}
 
 try_this_zone:
-		/*
-		 * Proactively wake kswapd if order-2 free blocks are
-		 * running low. Check on every allocation (not just order-2)
-		 * because order-0/1 allocations can split higher-order blocks
-		 * and rapidly deplete order-2 reserves.
-		 */
-		{
-			unsigned long wake_threshold =
-				READ_ONCE(kswapd_order2_wakeup_threshold);
-
-			if (wake_threshold && (alloc_flags & ALLOC_KSWAPD)) {
-				unsigned long nr_free_order2 = zone_free_order2_equiv(zone);
-
-				if (nr_free_order2 < wake_threshold) {
-					u64 wake_epoch = 0;
-					bool first_wake;
-					enum kswapd_wake_result wake_result;
-
-					first_wake = order2_kswapd_record_first_wake(
-						zone, nr_free_order2, wake_threshold, order,
-						gfp_mask, alloc_flags, &wake_epoch);
-					wake_result = wakeup_kswapd(zone, gfp_mask, 2,
-								    ac->highest_zoneidx);
-					if (first_wake)
-						trace_mm_order2_kswapd_wake_gate(
-							wake_epoch, zone->zone_pgdat->node_id,
-							zone_idx(zone), 2,
-							ac->highest_zoneidx, wake_result);
-				}
-			}
-		}
-
 		page = rmqueue(zonelist_zone(ac->preferred_zoneref), zone, order,
 				gfp_mask, alloc_flags, ac->migratetype);
 		if (page) {
@@ -4831,21 +4777,10 @@ restart:
 	if (page)
 		goto got_pg;
 
-	if (order == 2 && can_compact && sysctl_compact_order2_alloc_wake) {
-		struct zone *zone = ac->preferred_zoneref->zone;
-		unsigned long nr_free_o2 = 0;
-		unsigned int i;
-
-		for (i = 2; i < NR_PAGE_ORDERS; i++)
-			nr_free_o2 += zone->free_area[i].nr_free << (i - 2);
-
-		if (nr_free_o2 < sysctl_compact_order2_alloc_wake) {
-			set_bit(KCOMPACTD_WAKE_REASON_ALLOC,
-				&kcompactd_wake_reasons_bitmap);
-			wakeup_kcompactd(zone->zone_pgdat,
-					order, ac->highest_zoneidx);
-			count_vm_event(KCOMPACTD_WAKE_ALLOC_SLOWPATH);
-		}
+	if (order == 2 && can_compact) {
+		wakeup_kcompactd(ac->preferred_zoneref->zone->zone_pgdat,
+				order, ac->highest_zoneidx);
+		count_vm_event(KCOMPACTD_WAKE_ALLOC_SLOWPATH);
 	}
 
 	/*
