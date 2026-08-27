@@ -59,6 +59,13 @@
 
 #include "internal.h"
 
+/*
+ * 16KB alignment for non-MAP_FIXED mmap allocations (local experiment:
+ * commit 188af551ddea). Default on; set to 0 to fall back to PAGE_SIZE
+ * alignment. Exposed as /proc/sys/vm/mmap_align_16k.
+ */
+static int mmap_align_16k = 1;
+
 #ifndef arch_mmap_check
 #define arch_mmap_check(addr, len, flags)	(0)
 #endif
@@ -1550,13 +1557,6 @@ struct vm_area_struct *_install_special_mapping(
 #if defined(HAVE_ARCH_PICK_MMAP_LAYOUT) || \
 		defined(CONFIG_ARCH_WANT_DEFAULT_TOPDOWN_MMAP_LAYOUT)
 int sysctl_legacy_va_layout;
-
-/*
- * 16KB alignment for non-MAP_FIXED mmap allocations (local experiment:
- * commit 188af551ddea). Default on; set to 0 to fall back to PAGE_SIZE
- * alignment. Exposed as /proc/sys/vm/mmap_align_16k.
- */
-static int mmap_align_16k = 1;
 #endif
 
 static const struct ctl_table mmap_table[] = {
