@@ -4777,11 +4777,6 @@ restart:
 	if (page)
 		goto got_pg;
 
-	if (order == 2 && can_compact) {
-		wakeup_kcompactd(ac->preferred_zoneref->zone->zone_pgdat,
-				order, ac->highest_zoneidx);
-		count_vm_event(KCOMPACTD_WAKE_ALLOC_SLOWPATH);
-	}
 
 	/*
 	 * For costly allocations, try direct compaction first, as it's likely
