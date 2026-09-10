@@ -24,6 +24,7 @@
 #include <linux/page_owner.h>
 #include <linux/psi.h>
 #include <linux/cpuset.h>
+#include <linux/huge_mm.h>
 #include "internal.h"
 
 #ifdef CONFIG_COMPACTION
@@ -88,6 +89,21 @@ static inline bool is_via_compact_memory(int order) { return false; }
 #else
 #define COMPACTION_HPAGE_ORDER	(PMD_SHIFT - PAGE_SHIFT)
 #endif
+
+/* mTHP-aware compaction target: the minimum always-enabled mTHP order
+ * (e.g. order-2 for 16KB). Falls back to COMPACTION_HPAGE_ORDER when no
+ * mTHP order is configured. All fragmentation-score consumers use this
+ * (community patch P1); sysctl_compaction_order remains only as the
+ * kfragd movable-free-below accounting boundary.
+ */
+static inline int compact_hpage_order(void)
+{
+	unsigned long orders = READ_ONCE(huge_anon_orders_always);
+
+	if (orders)
+		return __ffs(orders);
+	return COMPACTION_HPAGE_ORDER;
+}
 
 static struct page *mark_allocated_noprof(struct page *page, unsigned int order, gfp_t gfp_flags)
 {
@@ -891,8 +907,11 @@ static bool skip_isolation_on_order(int order, int target_order)
 	 * later.
 	 */
 	if (is_via_compact_memory(target_order)) {
-		int filter = sysctl_compaction_order ? : COMPACTION_HPAGE_ORDER;
-		return order >= filter;
+		/* Skip folios that already satisfy the mTHP order */
+		if (READ_ONCE(huge_anon_orders_always))
+			return order >= compact_hpage_order();
+
+		return order >= COMPACTION_HPAGE_ORDER;
 	}
 
 	if (order >= target_order)
@@ -1721,6 +1740,8 @@ static void fast_isolate_freepages(struct compact_control *cc)
 
 	if (!page) {
 		cc->fast_search_fail++;
+		/* 素材不足观测：一次 fast 近端搜索完全空手 */
+		count_compact_event(COMPACT_FAST_SEARCH_FAIL);
 		if (scan_start) {
 			/*
 			 * Use the highest PFN found above min. If one was
@@ -1899,8 +1920,11 @@ again:
 
 	/* no free pages in the list */
 	if (start_order == NR_PAGE_ORDERS) {
-		if (has_isolated_pages)
+		if (has_isolated_pages) {
+			/* 素材不足观测：已隔离过一批又耗尽 -> 无目标可给，该页迁移失败 */
+			count_compact_event(COMPACT_FREE_TARGET_EXHAUSTED);
 			return NULL;
+		}
 		isolate_freepages(cc);
 		has_isolated_pages = true;
 		goto again;
@@ -2313,7 +2337,7 @@ static unsigned int fragmentation_score_wmark(bool low)
 static bool should_proactive_compact_node(pg_data_t *pgdat)
 {
 	int wmark_high;
-	unsigned int order = sysctl_compaction_order ? : COMPACTION_HPAGE_ORDER;
+	unsigned int order = compact_hpage_order();
 
 	if (!sysctl_compaction_proactiveness || kswapd_is_running(pgdat))
 		return false;
@@ -2353,15 +2377,27 @@ static enum compact_result __compact_finished(struct compact_control *cc)
 		pg_data_t *pgdat;
 
 		pgdat = cc->zone->zone_pgdat;
-		/* Externally triggered: only stop when scanners meet */
+		/*
+		 * kfragd path: externally triggered compaction only stops
+		 * when scanners meet — never yields early regardless of
+		 * kswapd activity or fragmentation score.
+		 */
 		if (pgdat->proactive_compact_trigger)
 			return COMPACT_CONTINUE;
 
-		if (kswapd_is_running(pgdat))
+		/*
+		 * Community path (sysctl compaction_proactiveness driven):
+		 * only back off for costly mTHP orders when kswapd is
+		 * running. Non-costly orders (e.g. order-2 16KB mTHP) may
+		 * compact concurrently with kswapd — kswapd reclaim alone
+		 * cannot produce the contiguous blocks needed.
+		 */
+		if (compact_hpage_order() > PAGE_ALLOC_COSTLY_ORDER &&
+		    kswapd_is_running(pgdat))
 			return COMPACT_PARTIAL_SKIPPED;
 
 		score = fragmentation_score_zone(cc->zone,
-			sysctl_compaction_order ? : COMPACTION_HPAGE_ORDER);
+			compact_hpage_order());
 		wmark_low = fragmentation_score_wmark(true);
 
 		if (score > wmark_low)
@@ -2746,6 +2782,8 @@ rescan:
 				MR_COMPACTION, &nr_succeeded);
 
 		trace_mm_compaction_migratepages(nr_migratepages, nr_succeeded);
+		/* 素材成本观测：本批成功迁移页数累计（页数，非次数） */
+		count_compact_events(COMPACT_MIGRATE_SUCCEEDED, nr_succeeded);
 
 		/* All pages were either migrated or will be released */
 		cc->nr_migratepages = 0;
@@ -3268,7 +3306,7 @@ static bool kfragd_should_compact(pg_data_t *pgdat)
 	if (!kfragd_enabled)
 		return false;
 
-	score = fragmentation_score_node(pgdat, sysctl_compaction_order);
+	score = fragmentation_score_node(pgdat, compact_hpage_order());
 
 	return score > kfragd_frag_high;
 }
@@ -3277,7 +3315,7 @@ static bool kfragd_target_met(pg_data_t *pgdat)
 {
 	unsigned int score;
 
-	score = fragmentation_score_node(pgdat, sysctl_compaction_order);
+	score = fragmentation_score_node(pgdat, compact_hpage_order());
 
 	return score <= kfragd_frag_low;
 }
@@ -3320,7 +3358,7 @@ static int kfragd(void *p)
 		WRITE_ONCE(kfragd_round_id, READ_ONCE(kfragd_round_id) + 1);
 		trace_printk("kfragd%d kround=%u enter score=%u\n",
 				pgdat->node_id, READ_ONCE(kfragd_round_id),
-				fragmentation_score_node(pgdat, sysctl_compaction_order));
+				fragmentation_score_node(pgdat, compact_hpage_order()));
 		while (!kthread_should_stop() && !kfragd_target_met(pgdat)) {
 			/* Step 1: Wake kcompactd to do compaction */
 			trace_printk("kfragd%d kround=%u iter_start movable_free=%lu o0=%lu score=%u\n",
@@ -3330,7 +3368,7 @@ static int kfragd(void *p)
 					kfragd_movable_free_order0(pgdat,
 							   highest_zoneidx),
 					fragmentation_score_node(pgdat,
-						sysctl_compaction_order));
+						compact_hpage_order()));
 			pgdat->proactive_compact_trigger = true;
 			wake_up_interruptible(&pgdat->kcompactd_wait);
 
@@ -3365,14 +3403,14 @@ static int kfragd(void *p)
 					kfragd_movable_free_below(pgdat,
 							   highest_zoneidx),
 					fragmentation_score_node(pgdat,
-						sysctl_compaction_order));
+						compact_hpage_order()));
 			}
 			/* Brief yield before next compact attempt */
 			cond_resched();
 		}
 		trace_printk("kfragd%d kround=%u exit score=%u\n",
 				pgdat->node_id, READ_ONCE(kfragd_round_id),
-				fragmentation_score_node(pgdat, sysctl_compaction_order));
+				fragmentation_score_node(pgdat, compact_hpage_order()));
 	}
 
 	return 0;
@@ -3431,7 +3469,7 @@ static int kcompactd(void *p)
 		count_vm_event(KCOMPACTD_TIMEOUT_WAKE);
 		if (should_proactive_compact_node(pgdat) || pgdat->proactive_compact_trigger) {
 			unsigned int prev_score, score;
-			unsigned int order = sysctl_compaction_order ? : COMPACTION_HPAGE_ORDER;
+			unsigned int order = compact_hpage_order();
 
 			WRITE_ONCE(kcompactd_round_id, READ_ONCE(kcompactd_round_id) + 1);
 			prev_score = fragmentation_score_node(pgdat, order);

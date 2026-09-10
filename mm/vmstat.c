@@ -1430,6 +1430,9 @@ const char * const vmstat_text[] = {
 	[I(KCOMPACTD_MIGRATE_SCANNED)]		= "compact_daemon_migrate_scanned",
 	[I(KCOMPACTD_FREE_SCANNED)]		= "compact_daemon_free_scanned",
 	[I(KCOMPACTD_ORDER2_CREATED)]		= "compact_daemon_order2_created",
+	[I(COMPACT_FAST_SEARCH_FAIL)]		= "compact_fast_search_fail",
+	[I(COMPACT_FREE_TARGET_EXHAUSTED)]	= "compact_free_target_exhausted",
+	[I(COMPACT_MIGRATE_SUCCEEDED)]		= "compact_migrate_succeeded",
 #endif
 	[I(ALLOC_SUCCESS_ORDER0)]		= "alloc_success_order0",
 	[I(ALLOC_SUCCESS_ORDER2)]		= "alloc_success_order2",
