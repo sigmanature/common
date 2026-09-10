@@ -48,8 +48,6 @@
 #include <linux/rcupdate_wait.h>
 #include <linux/sched/mm.h>
 #include <linux/sysctl.h>
-#include <linux/llist.h>
-#include <linux/workqueue.h>
 #include <asm/pgalloc.h>
 #include <asm/tlbflush.h>
 #include "internal.h"
@@ -1674,62 +1672,6 @@ void folio_end_writeback_no_dropbehind(struct folio *folio)
 }
 EXPORT_SYMBOL_GPL(folio_end_writeback_no_dropbehind);
 
-static DEFINE_PER_CPU(struct llist_head, dropbehind_llist);
-static struct workqueue_struct *dropbehind_wq;
-
-static bool bio_in_atomic(void)
-{
-	if (IS_ENABLED(CONFIG_PREEMPTION) && rcu_preempt_depth())
-		return true;
-	if (!IS_ENABLED(CONFIG_PREEMPT_COUNT))
-		return true;
-	return !preemptible();
-}
-
-static void dropbehind_workfn(struct work_struct *work)
-{
-	struct llist_node *pos, *next;
-	LIST_HEAD(reclaim_list);
-	int cpu;
-
-	for_each_possible_cpu(cpu) {
-		pos = llist_del_all(per_cpu_ptr(&dropbehind_llist, cpu));
-		llist_for_each_safe(pos, next, pos) {
-			struct folio *folio = container_of((struct list_head *)pos,
-					struct folio, lru);
-			if (folio_test_swapcache(folio)) {
-				/* refcount = isolate(1) + swapcache(1) = 2, ready */
-				list_add(&folio->lru, &reclaim_list);
-			} else {
-				folio_end_dropbehind(folio);
-				folio_put(folio);
-			}
-		}
-	}
-
-	if (!list_empty(&reclaim_list))
-		reclaim_pages(&reclaim_list);
-}
-
-static DECLARE_WORK(dropbehind_work, dropbehind_workfn);
-
-static void dropbehind_queue_folio(struct folio *folio)
-{
-	llist_add((struct llist_node *)&folio->lru,
-		  raw_cpu_ptr(&dropbehind_llist));
-	queue_work(dropbehind_wq, &dropbehind_work);
-}
-
-static int __init dropbehind_init(void)
-{
-	dropbehind_wq = alloc_workqueue("dropbehind",
-					WQ_MEM_RECLAIM | WQ_PERCPU, 0);
-	if (!dropbehind_wq)
-		return -ENOMEM;
-	return 0;
-}
-core_initcall(dropbehind_init);
-
 /**
  * folio_end_writeback - End writeback against a folio.
  * @folio: The folio.
@@ -1742,38 +1684,16 @@ void folio_end_writeback(struct folio *folio)
 {
 	VM_BUG_ON_FOLIO(!folio_test_writeback(folio), folio);
 
+	/*
+	 * Writeback does not hold a folio reference of its own, relying
+	 * on truncation to wait for the clearing of PG_writeback.
+	 * But here we must make sure that the folio is not freed and
+	 * reused before the folio_wake_bit().
+	 */
 	folio_get(folio);
 	folio_end_writeback_no_dropbehind(folio);
-
-	if (!folio_test_dropbehind(folio)) {
-		folio_put(folio);
-		return;
-	}
-
-	if (folio_test_swapcache(folio) || bio_in_atomic()) {
-		/*
-		 * Swap folio: must be on LRU to safely isolate and
-		 * reclaim. If on LRU, isolate (takes its own ref),
-		 * drop end_wb ref, and queue for batch reclaim.
-		 *
-		 * If not on LRU (rare: kswapd hasn't returned it yet),
-		 * give up - kswapd will reclaim it directly when it
-		 * sees writeback already completed (PAGE_CLEAN path).
-		 *
-		 * File folio in atomic context: defer to worker.
-		 */
-		if (folio_test_lru(folio) && folio_isolate_lru(folio)) {
-			folio_put(folio);
-			dropbehind_queue_folio(folio);
-		} else {
-			folio_clear_dropbehind(folio);
-			folio_put(folio);
-		}
-	} else {
-		/* File folio, safe context: handle inline */
-		folio_end_dropbehind(folio);
-		folio_put(folio);
-	}
+	folio_end_dropbehind(folio);
+	folio_put(folio);
 }
 EXPORT_SYMBOL(folio_end_writeback);
 
