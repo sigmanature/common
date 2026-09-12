@@ -3620,8 +3620,7 @@ bool __zone_watermark_ok_raw(struct zone *z, unsigned int order, unsigned long m
 		}
 	}
 	if (direct_reclaim) {
-		trace_alloc_stall_fragment(z, order, alloc_flags, free_pages,
-					   mark, z->lowmem_reserve[highest_zoneidx]);
+		trace_alloc_stall_fragment(z, order, alloc_flags);
 		count_vm_event(ALLOC_FAIL_FRAGMENT);
 		__this_cpu_write(last_alloc_stall_reason,
 				 ALLOC_STALL_REASON_FRAGMENT);
