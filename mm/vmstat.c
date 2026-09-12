@@ -1450,6 +1450,7 @@ const char * const vmstat_text[] = {
 	[I(KCOMPACTD_O2_MOVABLE_EMPTY)]		= "kcompactd_o2_movable_empty",
 	[I(KCOMPACTD_O2_MOVABLE_HAS)]		= "kcompactd_o2_movable_has",
 	[I(KCOMPACTD_WAKE_VMSCAN)]		= "kcompactd_wake_from_vmscan",
+	[I(KCOMPACTD_WAKE_ALLOC_SLOWPATH)]	= "kcompactd_wake_alloc_slowpath",
 
 	[I(MIGRATE_FAIL_ENOMEM)]		= "migrate_fail_enomem",
 	[I(MIGRATE_FAIL_EBUSY_WRITEBACK)]	= "migrate_fail_ebusy_writeback",
