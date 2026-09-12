@@ -1047,6 +1047,7 @@ isolate_migratepages_block(struct compact_control *cc, unsigned long low_pfn,
 		if (!valid_page && (pageblock_aligned(low_pfn) ||
 				    low_pfn == cc->zone->zone_start_pfn)) {
 			if (!isolation_suitable(cc, page)) {
+				count_vm_event(ISO_SKIP_BLOCK_BIT);
 				low_pfn = end_pfn;
 				folio = NULL;
 				goto isolate_abort;
@@ -1062,6 +1063,7 @@ isolate_migratepages_block(struct compact_control *cc, unsigned long low_pfn,
 			 * are handled below.
 			 */
 			if (!cc->alloc_contig) {
+				count_vm_event(ISO_SKIP_HUGEPAGE);
 
 				if (order <= MAX_PAGE_ORDER) {
 					low_pfn += (1UL << order) - 1;
@@ -1115,6 +1117,7 @@ isolate_migratepages_block(struct compact_control *cc, unsigned long low_pfn,
 		 * potential isolation targets.
 		 */
 		if (PageBuddy(page)) {
+			count_vm_event(ISO_SKIP_BUDDY);
 			unsigned long freepage_order = buddy_order_unsafe(page);
 
 			/*
@@ -1142,6 +1145,7 @@ isolate_migratepages_block(struct compact_control *cc, unsigned long low_pfn,
 
 			/* Skip based on page order and compaction target order. */
 			if (skip_isolation_on_order(order, cc->order)) {
+				count_vm_event(ISO_SKIP_ORDER_FILTER);
 				if (order <= MAX_PAGE_ORDER) {
 					low_pfn += (1UL << order) - 1;
 					nr_scanned += (1UL << order) - 1;
@@ -1170,6 +1174,7 @@ isolate_migratepages_block(struct compact_control *cc, unsigned long low_pfn,
 				}
 			}
 
+			count_vm_event(ISO_SKIP_NOT_LRU);
 			goto isolate_fail;
 		}
 
@@ -1188,8 +1193,10 @@ isolate_migratepages_block(struct compact_control *cc, unsigned long low_pfn,
 		 * admittedly racy check.
 		 */
 		mapping = folio_mapping(folio);
-		if (!mapping && (folio_ref_count(folio) - 1) > folio_mapcount(folio))
+		if (!mapping && (folio_ref_count(folio) - 1) > folio_mapcount(folio)) {
+			count_vm_event(ISO_SKIP_PINNED_ANON);
 			goto isolate_fail_put;
+		}
 
 		/*
 		 * Only allow to migrate anonymous pages in GFP_NOFS context
@@ -1205,8 +1212,10 @@ isolate_migratepages_block(struct compact_control *cc, unsigned long low_pfn,
 		is_unevictable = folio_test_unevictable(folio);
 
 		/* Compaction might skip unevictable pages but CMA takes them */
-		if (!(mode & ISOLATE_UNEVICTABLE) && is_unevictable)
+		if (!(mode & ISOLATE_UNEVICTABLE) && is_unevictable) {
+			count_vm_event(ISO_SKIP_UNEVICTABLE);
 			goto isolate_fail_put;
+		}
 
 		/*
 		 * To minimise LRU disruption, the caller can indicate with
@@ -1214,8 +1223,10 @@ isolate_migratepages_block(struct compact_control *cc, unsigned long low_pfn,
 		 * it will be able to migrate without blocking - clean pages
 		 * for the most part.  PageWriteback would require blocking.
 		 */
-		if ((mode & ISOLATE_ASYNC_MIGRATE) && folio_test_writeback(folio))
+		if ((mode & ISOLATE_ASYNC_MIGRATE) && folio_test_writeback(folio)) {
+			count_vm_event(ISO_SKIP_WRITEBACK_ASYNC);
 			goto isolate_fail_put;
+		}
 
 		is_dirty = folio_test_dirty(folio);
 
@@ -1252,13 +1263,17 @@ isolate_migratepages_block(struct compact_control *cc, unsigned long low_pfn,
 			}
 			is_inaccessible = mapping && mapping_inaccessible(mapping);
 			folio_unlock(folio);
-			if (!migrate_dirty || is_inaccessible)
+			if (!migrate_dirty || is_inaccessible) {
+				count_vm_event(ISO_SKIP_INACCESSIBLE);
 				goto isolate_fail_put;
+			}
 		}
 
 		/* Try isolate the folio */
-		if (!folio_test_clear_lru(folio))
+		if (!folio_test_clear_lru(folio)) {
+			count_vm_event(ISO_SKIP_CLEAR_LRU_FAIL);
 			goto isolate_fail_put;
+		}
 
 		lruvec = folio_lruvec(folio);
 
@@ -1281,6 +1296,7 @@ isolate_migratepages_block(struct compact_control *cc, unsigned long low_pfn,
 				skip_updated = true;
 				if (test_and_set_skip(cc, valid_page) &&
 				    !cc->finish_pageblock) {
+					count_vm_event(ISO_SKIP_BLOCK_BIT);
 					low_pfn = end_pfn;
 					goto isolate_abort;
 				}
@@ -1292,6 +1308,7 @@ isolate_migratepages_block(struct compact_control *cc, unsigned long low_pfn,
 			if (unlikely(skip_isolation_on_order(folio_order(folio),
 							     cc->order) &&
 				     !cc->alloc_contig)) {
+				count_vm_event(ISO_SKIP_ORDER_FILTER);
 				low_pfn += folio_nr_pages(folio) - 1;
 				nr_scanned += folio_nr_pages(folio) - 1;
 				folio_set_lru(folio);
@@ -1851,8 +1868,10 @@ static void isolate_freepages(struct compact_control *cc)
 			continue;
 
 		/* If isolation recently failed, do not retry */
-		if (!isolation_suitable(cc, page))
+		if (!isolation_suitable(cc, page)) {
+			count_vm_event(FREE_SKIP_BLOCK_BIT);
 			continue;
+		}
 
 		/* Found a block suitable for isolating free pages from. */
 		nr_isolated = isolate_freepages_block(cc, &isolate_start_pfn,

@@ -1206,15 +1206,19 @@ static int migrate_folio_unmap(new_folio_t get_new_folio,
 	bool dst_locked = false;
 
 	dst = get_new_folio(src, private);
-	if (!dst)
+	if (!dst) {
+		count_vm_event(MIGRATE_FAIL_ENOMEM);
 		return -ENOMEM;
+	}
 	*dstp = dst;
 
 	dst->private = NULL;
 
 	if (!folio_trylock(src)) {
-		if (mode == MIGRATE_ASYNC)
+		if (mode == MIGRATE_ASYNC) {
+			count_vm_event(MIGRATE_FAIL_EAGAIN_LOCK);
 			goto out;
+		}
 
 		/*
 		 * It's not safe for direct compaction to call lock_page.
@@ -1229,16 +1233,20 @@ static int migrate_folio_unmap(new_folio_t get_new_folio,
 		 * avoid the use of lock_page for direct compaction
 		 * altogether.
 		 */
-		if (current->flags & PF_MEMALLOC)
+		if (current->flags & PF_MEMALLOC) {
+			count_vm_event(MIGRATE_FAIL_EAGAIN_LOCK);
 			goto out;
+		}
 
 		/*
 		 * In "light" mode, we can wait for transient locks (eg
 		 * inserting a page into the page table), but it's not
 		 * worth waiting for I/O.
 		 */
-		if (mode == MIGRATE_SYNC_LIGHT && !folio_test_uptodate(src))
+		if (mode == MIGRATE_SYNC_LIGHT && !folio_test_uptodate(src)) {
+			count_vm_event(MIGRATE_FAIL_EAGAIN_NOTUPTODATE);
 			goto out;
+		}
 
 		folio_lock(src);
 	}
@@ -1257,6 +1265,7 @@ static int migrate_folio_unmap(new_folio_t get_new_folio,
 		case MIGRATE_SYNC:
 			break;
 		default:
+			count_vm_event(MIGRATE_FAIL_EBUSY_WRITEBACK);
 			rc = -EBUSY;
 			goto out;
 		}
@@ -1288,8 +1297,10 @@ static int migrate_folio_unmap(new_folio_t get_new_folio,
 	 * cases where there might be a race with the previous use of dst.
 	 * This is much like races on refcount of oldpage: just don't BUG().
 	 */
-	if (unlikely(!folio_trylock(dst)))
+	if (unlikely(!folio_trylock(dst))) {
+		count_vm_event(MIGRATE_FAIL_EAGAIN_LOCK);
 		goto out;
+	}
 	dst_locked = true;
 
 	if (unlikely(page_has_movable_ops(&src->page))) {
@@ -1311,6 +1322,7 @@ static int migrate_folio_unmap(new_folio_t get_new_folio,
 	 */
 	if (!src->mapping) {
 		if (folio_test_private(src)) {
+			count_vm_event(MIGRATE_FAIL_EAGAIN_BUFFERS);
 			try_to_free_buffers(src);
 			goto out;
 		}
@@ -1327,6 +1339,7 @@ static int migrate_folio_unmap(new_folio_t get_new_folio,
 		return 0;
 	}
 
+	count_vm_event(MIGRATE_FAIL_EAGAIN_MAPPED);
 out:
 	/*
 	 * A folio that has not been unmapped will be restored to
@@ -1365,8 +1378,10 @@ static int migrate_folio_move(free_folio_t put_new_folio, unsigned long private,
 	}
 
 	rc = move_to_new_folio(dst, src, mode);
-	if (rc)
+	if (rc) {
+		count_vm_event(MIGRATE_FAIL_MOVE);
 		goto out;
+	}
 
 	/*
 	 * When successful, push dst to LRU immediately: so that if it
@@ -1893,6 +1908,7 @@ static int migrate_pages_batch(struct list_head *from,
 			 */
 			switch(rc) {
 			case -ENOMEM:
+				count_vm_event(MIGRATE_BATCH_ENOMEM);
 				/*
 				 * When memory is low, don't bother to try to migrate
 				 * other folios, move unmapped folios, then exit.
