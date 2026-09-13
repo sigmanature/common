@@ -887,24 +887,26 @@ static int __migrate_folio(struct address_space *mapping, struct folio *dst,
 		else
 			count_vm_event(MIGRATE_REFMISMATCH_UNKNOWN);
 
-		/* 采样前 64 个失败现场的 pfn 与特征，供 page_ref 过滤追踪 */
-		if (refmismatch_samples < 64) {
+		/* 采样前 32 个失败现场的 pfn 与特征（printk 进 dmesg，trace_printk 在
+		 * migrate 上下文有丢失风险） */
+		if (refmismatch_samples < 32) {
 			refmismatch_samples++;
-			trace_printk("migref_fail pfn=%lx ref=%d expected=%d "
-				     "delta=%d pinned=%d swapcache=%d "
-				     "large=%d locked=%d mapcount=%d "
-				     "writeback=%d anon=%d order=%u\n",
-				     folio_pfn(src), folio_ref_count(src),
-				     expected_count, delta,
-				     folio_maybe_dma_pinned(src),
-				     folio_test_swapcache(src),
-				     folio_test_large(src) &&
-				     folio_test_large_rmappable(src),
-				     folio_test_locked(src),
-				     folio_mapcount(src),
-				     folio_test_writeback(src),
-				     folio_test_anon(src),
-				     folio_order(src));
+			printk(KERN_WARNING
+			       "migref_fail pfn=%lx ref=%d expected=%d "
+			       "delta=%d pinned=%d swapcache=%d "
+			       "large=%d locked=%d mapcount=%d "
+			       "writeback=%d anon=%d order=%u\n",
+			       folio_pfn(src), folio_ref_count(src),
+			       expected_count, delta,
+			       folio_maybe_dma_pinned(src),
+			       folio_test_swapcache(src),
+			       folio_test_large(src) &&
+			       folio_test_large_rmappable(src),
+			       folio_test_locked(src),
+			       folio_mapcount(src),
+			       folio_test_writeback(src),
+			       folio_test_anon(src),
+			       folio_order(src));
 		}
 		return -EAGAIN;
 	}
