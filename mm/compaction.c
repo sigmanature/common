@@ -99,23 +99,31 @@ static inline bool is_via_compact_memory(int order) { return false; }
  * (community patch P1); sysctl_compaction_order remains only as the
  * kfragd movable-free-below accounting boundary.
  */
+static inline bool mthp_always_enabled(void)
+{
+#ifdef CONFIG_TRANSPARENT_HUGEPAGE
+	return !!READ_ONCE(huge_anon_orders_always);
+#else
+	return false;
+#endif
+}
+
 static inline int compact_hpage_order(void)
 {
+#ifdef CONFIG_TRANSPARENT_HUGEPAGE
 	unsigned long orders = READ_ONCE(huge_anon_orders_always);
 
 	if (orders)
-		return __ffs(orders);
+		return __fls(orders);
+#endif
 	return COMPACTION_HPAGE_ORDER;
 }
 
+/* 0001 补丁兼容包装：社区 compact_hpage_order() 的出参接口
+ * （kfragd/vmscan 依赖；行为 = compact_hpage_order()）。 */
 int compaction_hpage_order(void)
 {
 	return compact_hpage_order();
-}
-
-static inline bool mthp_always_enabled(void)
-{
-	return READ_ONCE(huge_anon_orders_always) != 0;
 }
 
 static struct page *mark_allocated_noprof(struct page *page, unsigned int order, gfp_t gfp_flags)
@@ -919,16 +927,14 @@ static bool skip_isolation_on_order(int order, int target_order)
 	 * the desired target_order, so migrating this folio would likely fail
 	 * later.
 	 */
-	if (is_via_compact_memory(target_order)) {
-		/* Skip folios that already satisfy the mTHP order */
-		if (READ_ONCE(huge_anon_orders_always))
-			return order >= compact_hpage_order();
-
-		return order >= COMPACTION_HPAGE_ORDER;
-	}
-
-	if (order >= target_order)
+	if (!is_via_compact_memory(target_order) && order >= target_order)
 		return true;
+
+	/* We are compacting for multi-size THP allocation */
+	if (is_via_compact_memory(target_order) && order >= compact_hpage_order() &&
+	    mthp_always_enabled())
+		return true;
+
 	/*
 	 * We limit memory compaction to pageblocks and won't try
 	 * creating free blocks of memory that are larger than that.
@@ -2319,7 +2325,7 @@ static bool kswapd_is_running(pg_data_t *pgdat)
 
 /*
  * A zone's fragmentation score is the external fragmentation wrt to the
- * specified order. It returns a value in the range [0, 100].
+ * compact_hpage_order() order. It returns a value in the range [0, 100].
  */
 static unsigned int fragmentation_score_zone(struct zone *zone, unsigned int order)
 {
@@ -2328,7 +2334,7 @@ static unsigned int fragmentation_score_zone(struct zone *zone, unsigned int ord
 
 /*
  * A weighted zone's fragmentation score is the external fragmentation
- * wrt to the specified order scaled by the zone's size. It
+ * wrt to the compact_hpage_order() scaled by the zone's size. It
  * returns a value in the range [0, 100].
  *
  * The scaling factor ensures that proactive compaction focuses on larger
@@ -2384,9 +2390,7 @@ static bool should_proactive_compact_node(pg_data_t *pgdat)
 	unsigned int order = compact_hpage_order();
 	bool costly = order > PAGE_ALLOC_COSTLY_ORDER;
 
-	/* 仅 costly 目标阶才被 kswapd 运行抑制（0003 补丁语义） */
-	if (!sysctl_compaction_proactiveness ||
-	    (costly && kswapd_is_running(pgdat)))
+	if (!sysctl_compaction_proactiveness || (costly && kswapd_is_running(pgdat)))
 		return false;
 
 	wmark_high = fragmentation_score_wmark(false);
@@ -2422,25 +2426,14 @@ static enum compact_result __compact_finished(struct compact_control *cc)
 	if (cc->proactive_compaction) {
 		int score, wmark_low;
 		pg_data_t *pgdat;
+		bool costly = compact_hpage_order() > PAGE_ALLOC_COSTLY_ORDER;
 
 		pgdat = cc->zone->zone_pgdat;
-		/*
-		 * kfragd path: externally triggered compaction only stops
-		 * when scanners meet — never yields early regardless of
-		 * kswapd activity or fragmentation score.
-		 */
+		/* kfragd 外部 trigger：scanners meet 才停（kfragd 子系统行为） */
 		if (pgdat->proactive_compact_trigger)
 			return COMPACT_CONTINUE;
 
-		/*
-		 * Community path (sysctl compaction_proactiveness driven):
-		 * only back off for costly mTHP orders when kswapd is
-		 * running. Non-costly orders (e.g. order-2 16KB mTHP) may
-		 * compact concurrently with kswapd — kswapd reclaim alone
-		 * cannot produce the contiguous blocks needed.
-		 */
-		if (compact_hpage_order() > PAGE_ALLOC_COSTLY_ORDER &&
-		    kswapd_is_running(pgdat))
+		if (costly && kswapd_is_running(pgdat))
 			return COMPACT_PARTIAL_SKIPPED;
 
 		score = fragmentation_score_zone(cc->zone,
@@ -2666,13 +2659,13 @@ static unsigned long zone_free_pages_by_order(struct zone *zone,
 			zone_page_state(zone, NR_FREE_PAGES_BLOCKS);
 
 	/* kfragd 开启不走 mTHP 分支（保留拦截）；
-	 * 否则按上游 0004：仅 order == 目标阶 走聚合。 */
+	 * 否则按补丁 0004 原文：mthp_always_enabled() && order == compact_hpage_order() */
 	if (!kfragd_enabled && mthp_always_enabled() &&
 	    order == compact_hpage_order()) {
 		unsigned long free_pages = 0;
 
-		for (int o = compact_hpage_order(); o < NR_PAGE_ORDERS; o++)
-			free_pages += zone->free_area[o].nr_free << o;
+		for (int o = order; o < NR_PAGE_ORDERS; o++)
+			free_pages += data_race(zone->free_area[o].nr_free) << o;
 		return free_pages;
 	}
 

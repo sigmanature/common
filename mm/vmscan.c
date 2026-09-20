@@ -7057,11 +7057,11 @@ static bool pgdat_balanced(pg_data_t *pgdat, int order, int highest_zoneidx)
 		 * counter won't actually be per-cpu cached. But keep
 		 * things simple for now; revisit when somebody cares.
 		 */
-		free_pages =
-			zone_effective_free_pages(zone, order, defrag_mode && order);
+		free_pages = zone_effective_free_pages(zone, order,
+						       defrag_mode && order);
 		if (zone->percpu_drift_mark && free_pages < zone->percpu_drift_mark)
-			free_pages = zone_effective_free_pages_snapshot(zone, order,
-									defrag_mode && order);
+			free_pages = zone_effective_free_pages_snapshot(zone,
+					order, defrag_mode && order);
 
 		if (__zone_watermark_ok(zone, order, mark, highest_zoneidx,
 					 0, free_pages)) {
