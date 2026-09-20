@@ -85,6 +85,9 @@ static inline int current_is_kcompactd(void)
 	return current->flags & PF_KCOMPACTD;
 }
 
+/* mTHP-aware compaction target order (mm/compaction.c); used by vmscan. */
+int compaction_hpage_order(void);
+
 #ifdef CONFIG_COMPACTION
 
 extern unsigned int extfrag_for_order(struct zone *zone, unsigned int order);

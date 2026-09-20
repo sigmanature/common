@@ -1661,6 +1661,8 @@ int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm);
 unsigned long zone_effective_free_pages(struct zone *zone,
 					unsigned int order,
 					bool use_blocks);
-
+unsigned long zone_effective_free_pages_snapshot(struct zone *zone,
+						 unsigned int order,
+						 bool use_blocks);
 
 #endif	/* __MM_INTERNAL_H */

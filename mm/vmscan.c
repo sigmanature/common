@@ -7057,16 +7057,16 @@ static bool pgdat_balanced(pg_data_t *pgdat, int order, int highest_zoneidx)
 		 * counter won't actually be per-cpu cached. But keep
 		 * things simple for now; revisit when somebody cares.
 		 */
-		free_pages = zone_effective_free_pages(zone, order,
-						       defrag_mode & order);
+		free_pages =
+			zone_effective_free_pages(zone, order, defrag_mode && order);
 		if (zone->percpu_drift_mark && free_pages < zone->percpu_drift_mark)
-			free_pages = zone_page_state_snapshot(zone,
-					defrag_mode & order ?
-					NR_FREE_PAGES_BLOCKS : NR_FREE_PAGES);
+			free_pages = zone_effective_free_pages_snapshot(zone, order,
+									defrag_mode && order);
 
 		if (__zone_watermark_ok(zone, order, mark, highest_zoneidx,
-					 0, free_pages))
+					 0, free_pages)) {
 			return true;
+		}
 	}
 
 	/*
@@ -7410,7 +7410,6 @@ out:
 		 * pageblocks.
 		 */
 		wakeup_kcompactd(pgdat, pageblock_order, highest_zoneidx);
-		count_vm_event(KCOMPACTD_WAKE_VMSCAN);
 	}
 
 	snapshot_refaults(NULL, pgdat);
@@ -7474,7 +7473,6 @@ static void kswapd_try_to_sleep(pg_data_t *pgdat, int alloc_order, int reclaim_o
 		 * allocation of the requested order possible.
 		 */
 		wakeup_kcompactd(pgdat, alloc_order, highest_zoneidx);
-		count_vm_event(KCOMPACTD_WAKE_VMSCAN);
 
 		remaining = schedule_timeout(HZ/10);
 
@@ -7621,17 +7619,17 @@ kswapd_try_sleep:
  * has failed or is not needed, still wake up kcompactd if only compaction is
  * needed.
  */
-enum kswapd_wake_result wakeup_kswapd(struct zone *zone, gfp_t gfp_flags,
-				      int order, enum zone_type highest_zoneidx)
+void wakeup_kswapd(struct zone *zone, gfp_t gfp_flags, int order,
+		   enum zone_type highest_zoneidx)
 {
 	pg_data_t *pgdat;
 	enum zone_type curr_idx;
 
 	if (!managed_zone(zone))
-		return KSWAPD_WAKEUP_UNMANAGED_ZONE;
+		return;
 
 	if (!cpuset_zone_allowed(zone, gfp_flags))
-		return KSWAPD_WAKEUP_CPUSET_DENIED;
+		return;
 
 	pgdat = zone->zone_pgdat;
 	curr_idx = READ_ONCE(pgdat->kswapd_highest_zoneidx);
@@ -7643,10 +7641,12 @@ enum kswapd_wake_result wakeup_kswapd(struct zone *zone, gfp_t gfp_flags,
 		WRITE_ONCE(pgdat->kswapd_order, order);
 
 	if (!waitqueue_active(&pgdat->kswapd_wait))
-		return KSWAPD_WAKEUP_NO_WAITER;
+		return;
 
 	/* Hopeless node, leave it to direct reclaim if possible */
-	if (atomic_read(&pgdat->kswapd_failures) >= MAX_RECLAIM_RETRIES) {
+	if (atomic_read(&pgdat->kswapd_failures) >= MAX_RECLAIM_RETRIES ||
+	    (pgdat_balanced(pgdat, order, highest_zoneidx) &&
+	     !pgdat_watermark_boosted(pgdat, highest_zoneidx))) {
 		/*
 		 * There may be plenty of free memory available, but it's too
 		 * fragmented for high-order allocations.  Wake up kcompactd
@@ -7654,33 +7654,14 @@ enum kswapd_wake_result wakeup_kswapd(struct zone *zone, gfp_t gfp_flags,
 		 * needed.  If it fails, it will defer subsequent attempts to
 		 * ratelimit its work.
 		 */
-		if (!(gfp_flags & __GFP_DIRECT_RECLAIM)) {
+		if (!(gfp_flags & __GFP_DIRECT_RECLAIM))
 			wakeup_kcompactd(pgdat, order, highest_zoneidx);
-			count_vm_event(KCOMPACTD_WAKE_VMSCAN);
-		}
-		return KSWAPD_WAKEUP_MAX_FAILURES;
-	}
-
-	if (pgdat_balanced(pgdat, order, highest_zoneidx) &&
-	    !pgdat_watermark_boosted(pgdat, highest_zoneidx)) {
-		/*
-		 * There may be plenty of free memory available, but it's too
-		 * fragmented for high-order allocations.  Wake up kcompactd
-		 * and rely on compaction_suitable() to determine if it's
-		 * needed.  If it fails, it will defer subsequent attempts to
-		 * ratelimit its work.
-		 */
-		if (!(gfp_flags & __GFP_DIRECT_RECLAIM)) {
-			wakeup_kcompactd(pgdat, order, highest_zoneidx);
-			count_vm_event(KCOMPACTD_WAKE_VMSCAN);
-		}
-		return KSWAPD_WAKEUP_BALANCED;
+		return;
 	}
 
 	trace_mm_vmscan_wakeup_kswapd(pgdat->node_id, highest_zoneidx, order,
 				      gfp_flags);
 	wake_up_interruptible(&pgdat->kswapd_wait);
-	return KSWAPD_WAKEUP_ISSUED;
 }
 
 #ifdef CONFIG_HIBERNATION

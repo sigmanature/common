@@ -35,6 +35,9 @@ int kfragd_frag_low = 30;
 int kfragd_reclaim_batch = 2048;
 int kfragd_interval_ms = 500;
 int kfragd_force_reclaim;
+/* 实验开关：0=原逻辑（仅 anon pinned 提前跳）；1=用 __migrate_folio 的
+ * 精确 refcount 公式对所有 folio 做隔离点预判（带额外引用的直接跳过） */
+int isolate_skip_refmismatch;
 
 static struct task_struct *kfragd_thread[MAX_NUMNODES];
 /*
@@ -103,6 +106,16 @@ static inline int compact_hpage_order(void)
 	if (orders)
 		return __ffs(orders);
 	return COMPACTION_HPAGE_ORDER;
+}
+
+int compaction_hpage_order(void)
+{
+	return compact_hpage_order();
+}
+
+static inline bool mthp_always_enabled(void)
+{
+	return READ_ONCE(huge_anon_orders_always) != 0;
 }
 
 static struct page *mark_allocated_noprof(struct page *page, unsigned int order, gfp_t gfp_flags)
@@ -1191,9 +1204,21 @@ isolate_migratepages_block(struct compact_control *cc, unsigned long low_pfn,
 		 * Migration will fail if an anonymous page is pinned in memory,
 		 * so avoid taking lru_lock and isolating it unnecessarily in an
 		 * admittedly racy check.
+		 *
+		 * isolate_skip_refmismatch=1 (sysctl 实验开关): 用 __migrate_folio()
+		 * 的精确 refcount 公式对所有 folio 提前预判 —— 已带额外引用的页
+		 * 在迁移点必然失败，只会白烧 P1 3 次 + P2 7 次的预算。
+		 * folio_get_nontail_page() 已取的那笔引用就是这里的 "+1"。
 		 */
 		mapping = folio_mapping(folio);
-		if (!mapping && (folio_ref_count(folio) - 1) > folio_mapcount(folio)) {
+		if (isolate_skip_refmismatch) {
+			if (folio_ref_count(folio) !=
+			    folio_expected_ref_count(folio) + 1) {
+				count_vm_event(ISO_SKIP_REFMISMATCH);
+				goto isolate_fail_put;
+			}
+		} else if (!mapping &&
+			   (folio_ref_count(folio) - 1) > folio_mapcount(folio)) {
 			count_vm_event(ISO_SKIP_PINNED_ANON);
 			goto isolate_fail_put;
 		}
@@ -2357,8 +2382,11 @@ static bool should_proactive_compact_node(pg_data_t *pgdat)
 {
 	int wmark_high;
 	unsigned int order = compact_hpage_order();
+	bool costly = order > PAGE_ALLOC_COSTLY_ORDER;
 
-	if (!sysctl_compaction_proactiveness || kswapd_is_running(pgdat))
+	/* 仅 costly 目标阶才被 kswapd 运行抑制（0003 补丁语义） */
+	if (!sysctl_compaction_proactiveness ||
+	    (costly && kswapd_is_running(pgdat)))
 		return false;
 
 	wmark_high = fragmentation_score_wmark(false);
@@ -2612,10 +2640,11 @@ bool compaction_zonelist_suitable(struct alloc_context *ac, int order,
 }
 
 /**
- * zone_effective_free_pages - get free pages relevant to allocation order
+ * zone_free_pages_by_order - get free pages relevant to allocation order
  * @zone:       target zone
  * @order:      allocation order
  * @use_blocks: if true, use NR_FREE_PAGES_BLOCKS
+ * @snapshot:   if true, take the accurate per-cpu snapshot for zone stats
  *
  * In defrag_mode, watermarks must be met in whole blocks to avoid
  * polluting allocator fallbacks. kswapd usually cannot accomplish
@@ -2623,24 +2652,47 @@ bool compaction_zonelist_suitable(struct alloc_context *ac, int order,
  *
  * When mTHP always-enabled orders are configured, count only free pages
  * in blocks >= min mTHP order, as smaller fragments cannot satisfy mTHP
- * allocations.
+ * allocations. This subset is read directly from free_area and is not
+ * subject to per-cpu drift, so @snapshot has no effect on that path.
  */
-unsigned long zone_effective_free_pages(struct zone *zone,
-					unsigned int order,
-					bool use_blocks)
+static unsigned long zone_free_pages_by_order(struct zone *zone,
+					      unsigned int order,
+					      bool use_blocks,
+					      bool snapshot)
 {
 	if (use_blocks)
-		return zone_page_state(zone, NR_FREE_PAGES_BLOCKS);
+		return snapshot ?
+			zone_page_state_snapshot(zone, NR_FREE_PAGES_BLOCKS) :
+			zone_page_state(zone, NR_FREE_PAGES_BLOCKS);
 
-	if (READ_ONCE(huge_anon_orders_always) && order == compact_hpage_order()) {
+	/* kfragd 开启不走 mTHP 分支（保留拦截）；
+	 * 否则按上游 0004：仅 order == 目标阶 走聚合。 */
+	if (!kfragd_enabled && mthp_always_enabled() &&
+	    order == compact_hpage_order()) {
 		unsigned long free_pages = 0;
 
-		for (int o = order; o < NR_PAGE_ORDERS; o++)
+		for (int o = compact_hpage_order(); o < NR_PAGE_ORDERS; o++)
 			free_pages += zone->free_area[o].nr_free << o;
 		return free_pages;
 	}
 
-	return zone_page_state(zone, NR_FREE_PAGES);
+	return snapshot ?
+		zone_page_state_snapshot(zone, NR_FREE_PAGES) :
+		zone_page_state(zone, NR_FREE_PAGES);
+}
+
+unsigned long zone_effective_free_pages(struct zone *zone,
+					unsigned int order,
+					bool use_blocks)
+{
+	return zone_free_pages_by_order(zone, order, use_blocks, false);
+}
+
+unsigned long zone_effective_free_pages_snapshot(struct zone *zone,
+						 unsigned int order,
+						 bool use_blocks)
+{
+	return zone_free_pages_by_order(zone, order, use_blocks, true);
 }
 
 /*
@@ -3516,7 +3568,8 @@ static int kcompactd(void *p)
 		 */
 		timeout = default_timeout;
 		count_vm_event(KCOMPACTD_TIMEOUT_WAKE);
-		if (should_proactive_compact_node(pgdat) || pgdat->proactive_compact_trigger) {
+		if (should_proactive_compact_node(pgdat) ||
+		    (kfragd_enabled && pgdat->proactive_compact_trigger)) {
 			unsigned int prev_score, score;
 			unsigned int order = compact_hpage_order();
 
@@ -3696,6 +3749,15 @@ static const struct ctl_table vm_compaction[] = {
 		.procname	= "kfragd_force_reclaim",
 		.data		= &kfragd_force_reclaim,
 		.maxlen		= sizeof(kfragd_force_reclaim),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= SYSCTL_ONE,
+	},
+	{
+		.procname	= "isolate_skip_refmismatch",
+		.data		= &isolate_skip_refmismatch,
+		.maxlen		= sizeof(isolate_skip_refmismatch),
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= SYSCTL_ZERO,
