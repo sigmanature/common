@@ -2007,8 +2007,10 @@ no_page:
 			gfp_t alloc_gfp = gfp;
 
 			err = -ENOMEM;
-			if (order > min_order)
+			if (order > min_order) {
 				alloc_gfp |= __GFP_NORETRY | __GFP_NOWARN;
+				alloc_gfp &= ~__GFP_DIRECT_RECLAIM;
+			}
 			folio = filemap_alloc_folio(alloc_gfp, order);
 			if (!folio)
 				continue;
