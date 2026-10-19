@@ -2392,22 +2392,13 @@ void ufshcd_send_command(struct ufs_hba *hba, unsigned int task_tag,
 		ufshcd_inc_sq_tail(hwq);
 		spin_unlock(&hwq->sq_lock);
 	} else {
-		u32 db_before, db_after;
-
 		spin_lock_irqsave(&hba->outstanding_lock, flags);
-		db_before = ufshcd_readl(hba, REG_UTP_TRANSFER_REQ_DOOR_BELL);
-		trace_printk("UFSDBG send: tag=%u cmd=%px out_before=%#lx db_before=%#x\n",
-			     task_tag, lrbp->cmd, hba->outstanding_reqs,
-			     db_before);
 		if (hba->vops && hba->vops->setup_xfer_req)
 			hba->vops->setup_xfer_req(hba, lrbp->task_tag,
 						  !!lrbp->cmd);
 		__set_bit(lrbp->task_tag, &hba->outstanding_reqs);
 		ufshcd_writel(hba, 1 << lrbp->task_tag,
 			      REG_UTP_TRANSFER_REQ_DOOR_BELL);
-		db_after = ufshcd_readl(hba, REG_UTP_TRANSFER_REQ_DOOR_BELL);
-		trace_printk("UFSDBG send: tag=%u out_after=%#lx db_after=%#x\n",
-			     lrbp->task_tag, hba->outstanding_reqs, db_after);
 		spin_unlock_irqrestore(&hba->outstanding_lock, flags);
 	}
 }
@@ -5307,10 +5298,6 @@ set_qdepth:
 	 */
 	dev_dbg(hba->dev, "Set LU %x queue depth %d\n", lun, lun_qdepth);
 	scsi_change_queue_depth(sdev, lun_qdepth);
-	trace_printk("UFSDBG qdepth: lun=%llu qdepth=%u host_tagset=%d shared_tags=%px\n",
-		     sdev->lun, sdev->queue_depth,
-		     (int)hba->host->host_tagset,
-		     hba->host->tag_set.shared_tags);
 }
 
 /**
@@ -5672,8 +5659,6 @@ void ufshcd_compl_one_cqe(struct ufs_hba *hba, int task_tag,
 	enum utp_ocs ocs;
 
 	lrbp = &hba->lrb[task_tag];
-	trace_printk("UFSDBG compl: tag=%d cmd=%px out_reqs=%#lx\n",
-		     task_tag, lrbp->cmd, hba->outstanding_reqs);
 	if (hba->monitor.enabled) {
 		lrbp->compl_time_stamp = ktime_get();
 		lrbp->compl_time_stamp_local_clock = local_clock();
@@ -5751,9 +5736,6 @@ static int ufshcd_poll(struct Scsi_Host *shost, unsigned int queue_num)
 	spin_lock_irqsave(&hba->outstanding_lock, flags);
 	tr_doorbell = ufshcd_readl(hba, REG_UTP_TRANSFER_REQ_DOOR_BELL);
 	completed_reqs = ~tr_doorbell & hba->outstanding_reqs;
-	trace_printk("UFSDBG poll: q=%d tr_doorbell=%#x out_before=%#lx completed=%#lx n=%lu\n",
-		     queue_num, tr_doorbell, hba->outstanding_reqs,
-		     completed_reqs, hweight_long(completed_reqs));
 	WARN_ONCE(completed_reqs & ~hba->outstanding_reqs,
 		  "completed: %#lx; outstanding: %#lx\n", completed_reqs,
 		  hba->outstanding_reqs);
@@ -5762,8 +5744,6 @@ static int ufshcd_poll(struct Scsi_Host *shost, unsigned int queue_num)
 		ufshcd_clear_polled(hba, &completed_reqs);
 	}
 	hba->outstanding_reqs &= ~completed_reqs;
-	trace_printk("UFSDBG poll: q=%d out_after=%#lx\n", queue_num,
-		     hba->outstanding_reqs);
 	spin_unlock_irqrestore(&hba->outstanding_lock, flags);
 
 	if (completed_reqs)
@@ -10795,9 +10775,6 @@ int ufshcd_init(struct ufs_hba *hba, void __iomem *mmio_base, unsigned int irq)
 	ufshcd_host_memory_configure(hba);
 
 	host->can_queue = hba->nutrs - UFSHCD_NUM_RESERVED;
-	trace_printk("UFSDBG init: nutrs=%d can_queue=%d host_tagset=%d shared_tags=%px\n",
-		     hba->nutrs, host->can_queue, (int)host->host_tagset,
-		     host->tag_set.shared_tags);
 	host->cmd_per_lun = hba->nutrs - UFSHCD_NUM_RESERVED;
 	host->max_id = UFSHCD_MAX_ID;
 	host->max_lun = UFS_MAX_LUNS;
