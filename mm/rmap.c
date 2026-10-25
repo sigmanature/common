@@ -1764,7 +1764,7 @@ static __always_inline void __folio_remove_rmap(struct folio *folio,
 	    !folio_test_partially_mapped(folio)) {
 		trace_mm_folio_partial_unmap(folio, page, nr, nr_pmdmapped);
 		this_cpu_inc(deferred_split_reason_counts[DSR_PARTIALLY_MAPPED]);
-		deferred_split_folio(folio, true, DSR_PARTIALLY_MAPPED, vma);
+		deferred_split_folio(folio, true);
 	}
 
 	__folio_mod_stat(folio, -nr, -nr_pmdmapped);
@@ -1855,13 +1855,27 @@ static inline unsigned int folio_unmap_pte_batch(struct folio *folio,
 	end_addr = pmd_addr_end(addr, vma->vm_end);
 	max_nr = (end_addr - addr) >> PAGE_SHIFT;
 
-	/* We only support lazyfree batching for now ... */
-	if (!folio_test_anon(folio) || folio_test_swapbacked(folio))
+	/* We only support lazyfree or file folios batching for now ... */
+	if (folio_test_anon(folio) && folio_test_swapbacked(folio))
 		return 1;
 	if (pte_unused(pte))
 		return 1;
 
-	return folio_pte_batch(folio, pvmw->pte, pte, max_nr);
+	/*
+	 * pte_install_uffd_wp_if_needed() is per-PTE, so a batched unmap would
+	 * lose the uffd-wp markers. Keep those VMAs on the per-PTE path.
+	 */
+	if (userfaultfd_wp(vma))
+		return 1;
+
+	/*
+	 * If unmap fails, we need to restore the ptes. To avoid accidentally
+	 * upgrading write permissions for ptes that were not originally
+	 * writable, and to avoid losing the soft-dirty bit, use the
+	 * appropriate FPB flags.
+	 */
+	return folio_pte_batch_flags(folio, vma, pvmw->pte, &pte, max_nr,
+				     FPB_RESPECT_WRITE | FPB_RESPECT_SOFT_DIRTY);
 }
 
 /*
@@ -1916,6 +1930,8 @@ static bool try_to_unmap_one(struct folio *folio, struct vm_area_struct *vma,
 	mmu_notifier_invalidate_range_start(&range);
 
 	while (page_vma_mapped_walk(&pvmw)) {
+		nr_pages = 1;
+
 		/*
 		 * If the folio is in an mlock()d vma, we must not swap it out.
 		 */
@@ -2222,7 +2238,7 @@ static bool try_to_unmap_one(struct folio *folio, struct vm_area_struct *vma,
 			 *
 			 * See Documentation/mm/mmu_notifier.rst
 			 */
-			dec_mm_counter(mm, mm_counter_file(folio));
+			add_mm_counter(mm, mm_counter_file(folio), -nr_pages);
 		}
 discard:
 		if (unlikely(folio_test_hugetlb(folio))) {
