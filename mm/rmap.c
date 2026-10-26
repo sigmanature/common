@@ -77,6 +77,7 @@
 #include <linux/userfaultfd_k.h>
 #include <linux/mm_inline.h>
 #include <linux/oom.h>
+#include <linux/sysctl.h>
 
 #include <asm/tlbflush.h>
 
@@ -1838,6 +1839,12 @@ void folio_remove_rmap_pud(struct folio *folio, struct page *page,
 #endif
 }
 
+/*
+ * Allow disabling batched unmapping of file-backed large folios at runtime,
+ * for A/B evaluation. Lazyfree anonymous folio batching is not affected.
+ */
+static int file_folio_batch_unmap __read_mostly = 1;
+
 static inline unsigned int folio_unmap_pte_batch(struct folio *folio,
 			struct page_vma_mapped_walk *pvmw,
 			enum ttu_flags flags, pte_t pte)
@@ -1858,6 +1865,11 @@ static inline unsigned int folio_unmap_pte_batch(struct folio *folio,
 	/* We only support lazyfree or file folios batching for now ... */
 	if (folio_test_anon(folio) && folio_test_swapbacked(folio))
 		return 1;
+
+	/* File folio batching can be disabled at runtime. */
+	if (!folio_test_anon(folio) && !file_folio_batch_unmap)
+		return 1;
+
 	if (pte_unused(pte))
 		return 1;
 
@@ -3028,3 +3040,24 @@ void hugetlb_add_new_anon_rmap(struct folio *folio,
 	SetPageAnonExclusive(&folio->page);
 }
 #endif /* CONFIG_HUGETLB_PAGE */
+
+#ifdef CONFIG_SYSCTL
+static const struct ctl_table rmap_sysctl_table[] = {
+	{
+		.procname	= "file_folio_batch_unmap",
+		.data		= &file_folio_batch_unmap,
+		.maxlen		= sizeof(file_folio_batch_unmap),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= SYSCTL_ONE,
+	},
+};
+
+static int __init rmap_sysctl_init(void)
+{
+	register_sysctl_init("vm", rmap_sysctl_table);
+	return 0;
+}
+late_initcall(rmap_sysctl_init);
+#endif /* CONFIG_SYSCTL */
