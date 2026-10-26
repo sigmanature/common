@@ -59,13 +59,6 @@
 
 #include "internal.h"
 
-/*
- * 16KB alignment for non-MAP_FIXED mmap allocations (local experiment:
- * commit 188af551ddea). Default on; set to 0 to fall back to PAGE_SIZE
- * alignment. Exposed as /proc/sys/vm/mmap_align_16k.
- */
-static int mmap_align_16k = 1;
-
 #ifndef arch_mmap_check
 #define arch_mmap_check(addr, len, flags)	(0)
 #endif
@@ -736,10 +729,7 @@ generic_get_unmapped_area(struct file *filp, unsigned long addr,
 	info.length = len;
 	info.low_limit = mm->mmap_base;
 	info.high_limit = mmap_end;
-	if (mmap_align_16k)
-		info.align_mask = (PAGE_SIZE << 2) - 1;
-	else
-		info.align_mask = PAGE_SIZE - 1;
+	info.align_mask = PAGE_SIZE - 1;
 	info.start_gap = stack_guard_placement(vm_flags);
 	if (filp && is_file_hugepages(filp))
 		info.align_mask = huge_page_mask_align(filp);
@@ -806,10 +796,7 @@ generic_get_unmapped_area_topdown(struct file *filp, unsigned long addr,
 	info.length = len;
 	info.low_limit = PAGE_SIZE;
 	info.high_limit = arch_get_mmap_base(addr, mm->mmap_base);
-	if (mmap_align_16k)
-		info.align_mask = (PAGE_SIZE << 2) - 1;
-	else
-		info.align_mask = PAGE_SIZE - 1;
+	info.align_mask = PAGE_SIZE - 1;
 	info.start_gap = stack_guard_placement(vm_flags);
 	if (filp && is_file_hugepages(filp))
 		info.align_mask = huge_page_mask_align(filp);
@@ -1570,15 +1557,6 @@ static const struct ctl_table mmap_table[] = {
 		},
 #if defined(HAVE_ARCH_PICK_MMAP_LAYOUT) || \
 		defined(CONFIG_ARCH_WANT_DEFAULT_TOPDOWN_MMAP_LAYOUT)
-		{
-				.procname       = "mmap_align_16k",
-				.data           = &mmap_align_16k,
-				.maxlen         = sizeof(mmap_align_16k),
-				.mode           = 0644,
-				.proc_handler   = proc_dointvec_minmax,
-				.extra1         = SYSCTL_ZERO,
-				.extra2         = SYSCTL_ONE,
-		},
 		{
 				.procname       = "legacy_va_layout",
 				.data           = &sysctl_legacy_va_layout,
