@@ -574,11 +574,8 @@ static int __folio_migrate_mapping(struct address_space *mapping,
 		/* Take off deferred split queue while frozen and memcg set */
 		if (folio_test_large(folio) &&
 		    folio_test_large_rmappable(folio)) {
-			if (!folio_ref_freeze(folio, expected_count)) {
-				count_vm_event(MIGRATE_MAPFREEZE_TOTAL);
-				count_vm_event(MIGRATE_MAPFREEZE_ANON_LARGE);
+			if (!folio_ref_freeze(folio, expected_count))
 				return -EAGAIN;
-			}
 			folio_unqueue_deferred_split(folio);
 			folio_ref_unfreeze(folio, expected_count);
 		}
@@ -603,14 +600,10 @@ static int __folio_migrate_mapping(struct address_space *mapping,
 		xas_lock_irq(&xas);
 
 	if (!folio_ref_freeze(folio, expected_count)) {
-		count_vm_event(MIGRATE_MAPFREEZE_TOTAL);
-		if (ci) {
+		if (ci)
 			swap_cluster_unlock_irq(ci);
-			count_vm_event(MIGRATE_MAPFREEZE_SWAPCACHE);
-		} else {
+		else
 			xas_unlock_irq(&xas);
-			count_vm_event(MIGRATE_MAPFREEZE_PAGECACHE);
-		}
 		return -EAGAIN;
 	}
 
@@ -856,60 +849,11 @@ static int __migrate_folio(struct address_space *mapping, struct folio *dst,
 			   struct folio *src, void *src_private,
 			   enum migrate_mode mode)
 {
-	static unsigned int refmismatch_samples;
 	int rc, expected_count = folio_expected_ref_count(src) + 1;
 
 	/* Check whether src does not have extra refs before we do more work */
-	if (folio_ref_count(src) != expected_count) {
-		int delta = folio_ref_count(src) - expected_count;
-
-		count_vm_event(MIGRATE_REFMISMATCH_TOTAL);
-		if (delta < 0)
-			count_vm_event(MIGRATE_REFMISMATCH_MISSING);
-		else if (delta == 1)
-			count_vm_event(MIGRATE_REFMISMATCH_EXTRA1);
-		else if (delta == 2)
-			count_vm_event(MIGRATE_REFMISMATCH_EXTRA2);
-		else
-			count_vm_event(MIGRATE_REFMISMATCH_EXTRA_GE3);
-
-		if (folio_maybe_dma_pinned(src))
-			count_vm_event(MIGRATE_REFMISMATCH_PINNED);
-		else if (folio_test_swapcache(src))
-			count_vm_event(MIGRATE_REFMISMATCH_SWAPCACHE);
-		else if (folio_test_large(src) &&
-			 folio_test_large_rmappable(src))
-			count_vm_event(MIGRATE_REFMISMATCH_LARGE);
-		else if (folio_test_locked(src))
-			count_vm_event(MIGRATE_REFMISMATCH_LOCKED);
-		else if (folio_mapcount(src) > 0)
-			count_vm_event(MIGRATE_REFMISMATCH_MAPPED);
-		else
-			count_vm_event(MIGRATE_REFMISMATCH_UNKNOWN);
-
-		/* 采样前 32 个失败现场的 pfn 与特征（printk 进 dmesg，trace_printk 在
-		 * migrate 上下文有丢失风险） */
-		if (refmismatch_samples < 32) {
-			refmismatch_samples++;
-			printk(KERN_WARNING
-			       "migref_fail pfn=%lx ref=%d expected=%d "
-			       "delta=%d pinned=%d swapcache=%d "
-			       "large=%d locked=%d mapcount=%d "
-			       "writeback=%d anon=%d order=%u\n",
-			       folio_pfn(src), folio_ref_count(src),
-			       expected_count, delta,
-			       folio_maybe_dma_pinned(src),
-			       folio_test_swapcache(src),
-			       folio_test_large(src) &&
-			       folio_test_large_rmappable(src),
-			       folio_test_locked(src),
-			       folio_mapcount(src),
-			       folio_test_writeback(src),
-			       folio_test_anon(src),
-			       folio_order(src));
-		}
+	if (folio_ref_count(src) != expected_count)
 		return -EAGAIN;
-	}
 
 	rc = folio_mc_copy(dst, src);
 	if (unlikely(rc))
