@@ -253,8 +253,8 @@ void swapin_split_note_split(struct anon_vma *anon_vma, unsigned long win,
 	list_add_tail(&e->lru, &swsplit_lru);
 	swsplit_count++;
 	swsplit_stats.split_enqueued++;
-	swsplit_record_locked(SWSPLIT_EV_SPLIT, anon_vma, win, addr,
-			      orig_start, orig_end, 0, 0, e->split_off, 0);
+	/* Only the hash keeps the split state; the ring is reserved for
+	 * first/cascade partial events so that 30k+ splits cannot flood it. */
 	spin_unlock_irqrestore(&swsplit_lock, flags);
 
 	swsplit_free_list(&free_list);
