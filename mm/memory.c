@@ -61,6 +61,7 @@
 #include <linux/memcontrol.h>
 #include <linux/mmu_notifier.h>
 #include <linux/swapops.h>
+#include <linux/swapin_split_track.h>
 #include <linux/elf.h>
 #include <linux/gfp.h>
 #include <linux/migrate.h>
@@ -4734,7 +4735,7 @@ static inline unsigned long thp_swap_suitable_orders(pgoff_t swp_offset,
 static struct folio *alloc_swap_folio(struct vm_fault *vmf)
 {
 	struct vm_area_struct *vma = vmf->vma;
-	unsigned long orders;
+	unsigned long orders, orders_allow, orders_suit, orders_swap;
 	struct folio *folio;
 	unsigned long addr;
 	swp_entry_t entry;
@@ -4742,6 +4743,10 @@ static struct folio *alloc_swap_folio(struct vm_fault *vmf)
 	pte_t *pte;
 	gfp_t gfp;
 	int order;
+	int reason = SWSPLIT_R_OTHER;
+	bool batch_ok = false;
+
+	entry = pte_to_swp_entry(vmf->orig_pte);
 
 	/*
 	 * If uffd is active for the vma we need per-page fault fidelity to
@@ -4758,24 +4763,35 @@ static struct folio *alloc_swap_folio(struct vm_fault *vmf)
 	if (!zswap_never_enabled())
 		goto fallback;
 
-	entry = pte_to_swp_entry(vmf->orig_pte);
 	/*
 	 * Get a list of all the (large) orders below PMD_ORDER that are enabled
 	 * and suitable for swapping THP.
 	 */
-	orders = thp_vma_allowable_orders(vma, vma->vm_flags, TVA_PAGEFAULT,
-					  BIT(PMD_ORDER) - 1);
-	orders = thp_vma_suitable_orders(vma, vmf->address, orders);
-	orders = thp_swap_suitable_orders(swp_offset(entry),
-					  vmf->address, orders);
+	orders_allow = thp_vma_allowable_orders(vma, vma->vm_flags,
+						TVA_PAGEFAULT,
+						BIT(PMD_ORDER) - 1);
+	orders_suit = thp_vma_suitable_orders(vma, vmf->address, orders_allow);
+	orders_swap = thp_swap_suitable_orders(swp_offset(entry),
+					      vmf->address, orders_suit);
+	orders = orders_swap;
 
-	if (!orders)
+	if (!orders) {
+		if (!orders_allow)
+			reason = SWSPLIT_R_THP_ALLOW;
+		else if (!orders_suit)
+			reason = SWSPLIT_R_VMA_WINDOW;
+		else
+			reason = SWSPLIT_R_PHASE;
 		goto fallback;
+	}
 
 	pte = pte_offset_map_lock(vmf->vma->vm_mm, vmf->pmd,
 				  vmf->address & PMD_MASK, &ptl);
-	if (unlikely(!pte))
+	if (unlikely(!pte)) {
+		count_vm_event(SWAPIN_PREENTRY_FAIL);
+		reason = SWSPLIT_R_PREENTRY;
 		goto fallback;
+	}
 
 	/*
 	 * For do_swap_page, find the highest order where the aligned range is
@@ -4784,30 +4800,48 @@ static struct folio *alloc_swap_folio(struct vm_fault *vmf)
 	order = highest_order(orders);
 	while (orders) {
 		addr = ALIGN_DOWN(vmf->address, PAGE_SIZE << order);
-		if (can_swapin_thp(vmf, pte + pte_index(addr), 1 << order))
+		if (can_swapin_thp(vmf, pte + pte_index(addr), 1 << order)) {
+			batch_ok = true;
 			break;
+		}
 		order = next_order(&orders, order);
 	}
 
 	pte_unmap_unlock(pte, ptl);
 
+	if (!batch_ok) {
+		reason = SWSPLIT_R_PTE_BATCH;
+		goto fallback;
+	}
+
 	/* Try allocating the highest of the remaining orders. */
 	gfp = vma_thp_gfp_mask(vma);
+	/*
+	 * Force direct reclaim for swapin large-folio allocation so that
+	 * zram partial-read allocations and swapin fallback can be attributed.
+	 */
+	gfp |= __GFP_DIRECT_RECLAIM;
 	while (orders) {
 		addr = ALIGN_DOWN(vmf->address, PAGE_SIZE << order);
 		folio = vma_alloc_folio(gfp, order, vma, addr);
 		if (folio) {
 			if (!mem_cgroup_swapin_charge_folio(folio, vma->vm_mm,
-							    gfp, entry))
+							    gfp, entry)) {
+				swapin_split_note_success(vmf, entry.val, order);
 				return folio;
+			}
 			count_mthp_stat(order, MTHP_STAT_SWPIN_FALLBACK_CHARGE);
 			folio_put(folio);
+			reason = SWSPLIT_R_CHARGE;
+		} else {
+			reason = SWSPLIT_R_ALLOC;
 		}
 		count_mthp_stat(order, MTHP_STAT_SWPIN_FALLBACK);
 		order = next_order(&orders, order);
 	}
 
 fallback:
+	swapin_split_note_fallback(vmf, entry.val, reason);
 	return __alloc_swap_folio(vmf);
 }
 #else /* !CONFIG_TRANSPARENT_HUGEPAGE */

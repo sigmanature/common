@@ -6,6 +6,7 @@
 
 #include "vma_internal.h"
 #include "vma.h"
+#include <linux/swapin_split_track.h>
 
 struct mmap_state {
 	struct mm_struct *mm;
@@ -502,6 +503,9 @@ __split_vma(struct vma_iterator *vmi, struct vm_area_struct *vma,
 	struct vma_prepare vp;
 	struct vm_area_struct *new;
 	int err;
+	unsigned long track_start = vma->vm_start;
+	unsigned long track_end = vma->vm_end;
+	struct anon_vma *track_anon = vma->anon_vma;
 
 	WARN_ON(vma->vm_start >= addr);
 	WARN_ON(vma->vm_end <= addr);
@@ -535,6 +539,8 @@ __split_vma(struct vma_iterator *vmi, struct vm_area_struct *vma,
 	err = anon_vma_clone(new, vma);
 	if (err)
 		goto out_free_mpol;
+	if (!track_anon)
+		track_anon = new->anon_vma;
 
 	if (new->vm_file)
 		get_file(new->vm_file);
@@ -567,6 +573,10 @@ __split_vma(struct vma_iterator *vmi, struct vm_area_struct *vma,
 	/* vma_complete stores the new vma */
 	vma_complete(&vp, vmi, vma->vm_mm);
 	validate_mm(vma->vm_mm);
+
+	if (vma_is_anonymous(vma))
+		swapin_split_note_split(track_anon, ALIGN_DOWN(addr, 1UL << 14),
+					addr, track_start, track_end);
 
 	/* Success. */
 	if (new_below)
