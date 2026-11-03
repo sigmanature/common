@@ -4679,7 +4679,28 @@ static struct folio *__alloc_swap_folio(struct vm_fault *vmf)
  * Check if the PTEs within a range are contiguous swap entries
  * and have consistent swapcache, zeromap.
  */
-static bool can_swapin_thp(struct vm_fault *vmf, pte_t *ptep, int nr_pages)
+static int swap_pte_batch_reason(pte_t *ptep, int nr_pages, pte_t pte)
+{
+	unsigned short cg = lookup_swap_cgroup_id(pte_to_swp_entry(pte));
+	pte_t expected = pte;
+	int i;
+
+	for (i = 1; i < nr_pages; i++) {
+		pte_t p = ptep_get(ptep + i);
+
+		if (!is_swap_pte(p))
+			return SWSPLIT_R_PTE_NOT_SWAP;
+		if (!pte_same(p, pte_move_swp_offset(expected, 1)))
+			return SWSPLIT_R_PTE_OFFSET;
+		if (lookup_swap_cgroup_id(pte_to_swp_entry(p)) != cg)
+			return SWSPLIT_R_PTE_CGROUP;
+		expected = pte_move_swp_offset(expected, 1);
+	}
+	return SWSPLIT_R_PTE_BATCH;
+}
+
+static bool can_swapin_thp(struct vm_fault *vmf, pte_t *ptep, int nr_pages,
+			   int *fail_reason)
 {
 	unsigned long addr;
 	swp_entry_t entry;
@@ -4690,21 +4711,29 @@ static bool can_swapin_thp(struct vm_fault *vmf, pte_t *ptep, int nr_pages)
 	idx = (vmf->address - addr) / PAGE_SIZE;
 	pte = ptep_get(ptep);
 
-	if (!pte_same(pte, pte_move_swp_offset(vmf->orig_pte, -idx)))
+	if (!pte_same(pte, pte_move_swp_offset(vmf->orig_pte, -idx))) {
+		*fail_reason = SWSPLIT_R_PTE_START;
 		return false;
+	}
 	entry = pte_to_swp_entry(pte);
-	if (swap_pte_batch(ptep, nr_pages, pte) != nr_pages)
+	if (swap_pte_batch(ptep, nr_pages, pte) != nr_pages) {
+		*fail_reason = swap_pte_batch_reason(ptep, nr_pages, pte);
 		return false;
+	}
 
 	/*
 	 * swap_read_folio() can't handle the case a large folio is hybridly
 	 * from different backends. And they are likely corner cases. Similar
 	 * things might be added once zswap support large folios.
 	 */
-	if (unlikely(swap_zeromap_batch(entry, nr_pages, NULL) != nr_pages))
+	if (unlikely(swap_zeromap_batch(entry, nr_pages, NULL) != nr_pages)) {
+		*fail_reason = SWSPLIT_R_ZEROMAP;
 		return false;
-	if (unlikely(non_swapcache_batch(entry, nr_pages) != nr_pages))
+	}
+	if (unlikely(non_swapcache_batch(entry, nr_pages) != nr_pages)) {
+		*fail_reason = SWSPLIT_R_SWAPCACHE;
 		return false;
+	}
 
 	return true;
 }
@@ -4744,6 +4773,7 @@ static struct folio *alloc_swap_folio(struct vm_fault *vmf)
 	gfp_t gfp;
 	int order;
 	int reason = SWSPLIT_R_OTHER;
+	int batch_reason = SWSPLIT_R_PTE_BATCH;
 	bool batch_ok = false;
 
 	entry = pte_to_swp_entry(vmf->orig_pte);
@@ -4800,7 +4830,8 @@ static struct folio *alloc_swap_folio(struct vm_fault *vmf)
 	order = highest_order(orders);
 	while (orders) {
 		addr = ALIGN_DOWN(vmf->address, PAGE_SIZE << order);
-		if (can_swapin_thp(vmf, pte + pte_index(addr), 1 << order)) {
+		if (can_swapin_thp(vmf, pte + pte_index(addr), 1 << order,
+				   &batch_reason)) {
 			batch_ok = true;
 			break;
 		}
@@ -4810,7 +4841,7 @@ static struct folio *alloc_swap_folio(struct vm_fault *vmf)
 	pte_unmap_unlock(pte, ptl);
 
 	if (!batch_ok) {
-		reason = SWSPLIT_R_PTE_BATCH;
+		reason = batch_reason;
 		goto fallback;
 	}
 

@@ -28,12 +28,17 @@
 #include <linux/string.h>
 #include <linux/vmalloc.h>
 #include <linux/err.h>
+
+#define CREATE_TRACE_POINTS
+#include "zram_trace.h"
 #include <linux/idr.h>
 #include <linux/sysfs.h>
 #include <linux/debugfs.h>
 #include <linux/cpuhotplug.h>
 #include <linux/part_stat.h>
 #include <linux/kernel_read_file.h>
+#include <linux/vmstat.h>
+#include <linux/sysctl.h>
 
 #include "zram_drv.h"
 #include "kcompressd.h"
@@ -47,6 +52,10 @@ static int zram_major;
 static const char *default_compressor = CONFIG_ZRAM_DEF_COMP;
 
 #define ZRAM_MAX_ALGO_NAME_SZ	128
+
+#ifdef CONFIG_ZRAM_MULTI_PAGES
+static bool zram_multi_pages_bypass __read_mostly = true;
+#endif
 
 /* Module params (documentation at end) */
 static unsigned int num_devices = 1;
@@ -1911,7 +1920,8 @@ static int zram_write_page(struct zram *zram, struct page *page, u32 index)
 	int nr_pages = 1;
 
 #ifdef CONFIG_ZRAM_MULTI_PAGES
-	if (folio_size(page_folio(page)) >= ZCOMP_MULTI_PAGES_SIZE) {
+	if (!READ_ONCE(zram_multi_pages_bypass) &&
+	    folio_size(page_folio(page)) >= ZCOMP_MULTI_PAGES_SIZE) {
 		page_size = ZCOMP_MULTI_PAGES_SIZE;
 		huge_class_idx = ZSMALLOC_TYPE_MULTI_PAGES;
 		nr_pages = ZCOMP_MULTI_PAGES_NR;
@@ -2465,6 +2475,25 @@ static void zram_bio_write_page(struct zram *zram, struct bio *bio)
 }
 
 #ifdef CONFIG_ZRAM_MULTI_PAGES
+/*
+ * Runtime bypass for multi-page (large block) compression.
+ * 1 (default) = bypass: behave as if CONFIG_ZRAM_MULTI_PAGES is off.
+ * 0           = use multi-page compression.
+ * Exposed as /proc/sys/vm/zram_multi_pages_bypass.
+ * NOTE: after toggling, reset zram0 before comparative experiments.
+ */
+static const struct ctl_table zram_multi_pages_sysctls[] = {
+	{
+		.procname	= "zram_multi_pages_bypass",
+		.data		= &zram_multi_pages_bypass,
+		.maxlen		= sizeof(zram_multi_pages_bypass),
+		.mode		= 0644,
+		.proc_handler	= proc_dobool,
+	},
+};
+
+static struct ctl_table_header *zram_multi_pages_sysctls_header;
+
 static inline u32 zram_multi_pages_head_index(u32 index)
 {
 	return index & ~((u32)ZCOMP_MULTI_PAGES_NR - 1);
@@ -2488,6 +2517,9 @@ static bool want_multi_pages_comp(struct zram *zram, struct bio *bio)
 	u32 index = bio->bi_iter.bi_sector >> SECTORS_PER_PAGE_SHIFT;
 	bool ret;
 
+	if (READ_ONCE(zram_multi_pages_bypass))
+		return false;
+
 	if (bio->bi_io_vec->bv_len >= ZCOMP_MULTI_PAGES_SIZE)
 		return true;
 
@@ -2502,6 +2534,9 @@ static bool test_multi_pages_comp(struct zram *zram, struct bio *bio)
 {
 	u32 index = bio->bi_iter.bi_sector >> SECTORS_PER_PAGE_SHIFT;
 	bool ret;
+
+	if (READ_ONCE(zram_multi_pages_bypass))
+		return false;
 
 	zram_slot_lock(zram, index);
 	ret = __test_multi_pages_comp(zram, index);
@@ -2524,6 +2559,8 @@ static int zram_bvec_read_multi_pages_partial(struct zram *zram,
 	void *dst;
 	int ret;
 
+	count_vm_event(ZRAM_BVEC_READ_PARTIAL);
+	trace_zram_partial_read(index, offset);
 	page = alloc_pages(GFP_NOIO | __GFP_COMP, ZCOMP_MULTI_PAGES_ORDER);
 	if (!page)
 		return -ENOMEM;
@@ -2560,6 +2597,7 @@ static int zram_bvec_write_multi_pages_partial(struct zram *zram,
 	void *src, *dst;
 	int ret;
 
+	count_vm_event(ZRAM_BVEC_WRITE_PARTIAL);
 	page = alloc_pages(GFP_NOIO | __GFP_COMP, ZCOMP_MULTI_PAGES_ORDER);
 	if (!page)
 		return -ENOMEM;
@@ -3269,6 +3307,11 @@ static int __init zram_init(void)
 		num_devices--;
 	}
 
+#ifdef CONFIG_ZRAM_MULTI_PAGES
+	zram_multi_pages_sysctls_header =
+		register_sysctl("vm", zram_multi_pages_sysctls);
+#endif
+
 	return 0;
 
 out_error:
@@ -3278,6 +3321,10 @@ out_error:
 
 static void __exit zram_exit(void)
 {
+#ifdef CONFIG_ZRAM_MULTI_PAGES
+	if (zram_multi_pages_sysctls_header)
+		unregister_sysctl_table(zram_multi_pages_sysctls_header);
+#endif
 	destroy_devices();
 }
 

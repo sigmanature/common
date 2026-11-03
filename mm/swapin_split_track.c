@@ -120,6 +120,19 @@ static u32 swsplit_ring_tail;
 static u32 swsplit_ring_count;
 static u64 swsplit_seq;
 
+/* head -> last fallback reason; lets userspace join zram partial heads */
+#define SWSPLIT_FB_SIZE	32768
+struct swsplit_fb {
+	u32 head;
+	u32 reason;
+	u32 count;
+	unsigned long win;
+	u64 anon_vma;
+	u64 ts;
+	u8 used;
+};
+static struct swsplit_fb swsplit_fb[SWSPLIT_FB_SIZE];
+
 static inline bool swsplit_on(void)
 {
 	return static_branch_unlikely(&swapin_split_key);
@@ -260,6 +273,35 @@ void swapin_split_note_split(struct anon_vma *anon_vma, unsigned long win,
 	swsplit_free_list(&free_list);
 }
 
+static void swsplit_note_fb_locked(u32 head, int reason, unsigned long win,
+				 struct anon_vma *anon_vma)
+{
+	u32 start = hash_32(head, ilog2(SWSPLIT_FB_SIZE));
+	struct swsplit_fb *e = NULL;
+	int i;
+
+	for (i = 0; i < 8; i++) {
+		struct swsplit_fb *c = &swsplit_fb[(start + i) & (SWSPLIT_FB_SIZE - 1)];
+
+		if (!c->used || c->head == head) {
+			e = c;
+			break;
+		}
+	}
+	if (!e)
+		e = &swsplit_fb[start];
+	if (!e->used || e->head != head) {
+		e->used = 1;
+		e->head = head;
+		e->count = 0;
+	}
+	e->reason = reason;
+	e->count++;
+	e->win = win;
+	e->anon_vma = (u64)(unsigned long)anon_vma;
+	e->ts = ktime_get_ns();
+}
+
 void swapin_split_note_fallback(struct vm_fault *vmf, unsigned long entry_val,
 				int reason)
 {
@@ -278,6 +320,7 @@ void swapin_split_note_fallback(struct vm_fault *vmf, unsigned long entry_val,
 	head = swp_offset(entry) & ~(SWSPLIT_NR - 1);
 
 	spin_lock_irqsave(&swsplit_lock, flags);
+	swsplit_note_fb_locked(head, reason, win, vmf->vma->anon_vma);
 	e = swsplit_find_locked(vmf->vma->anon_vma, win);
 	if (e) {
 		u32 off = (vmf->address - win) >> PAGE_SHIFT;
@@ -409,6 +452,12 @@ static const char *swsplit_reason_name(u32 reason)
 	case SWSPLIT_R_THP_ALLOW:	return "THP_ALLOW";
 	case SWSPLIT_R_PHASE:		return "PHASE";
 	case SWSPLIT_R_PTE_BATCH:	return "PTE_BATCH";
+	case SWSPLIT_R_PTE_START:	return "PTE_START";
+	case SWSPLIT_R_PTE_NOT_SWAP:	return "PTE_NOT_SWAP";
+	case SWSPLIT_R_PTE_OFFSET:	return "PTE_OFFSET";
+	case SWSPLIT_R_PTE_CGROUP:	return "PTE_CGROUP";
+	case SWSPLIT_R_ZEROMAP:		return "ZEROMAP";
+	case SWSPLIT_R_SWAPCACHE:	return "SWAPCACHE";
 	case SWSPLIT_R_ALLOC:		return "ALLOC";
 	case SWSPLIT_R_CHARGE:		return "CHARGE";
 	case SWSPLIT_R_PREENTRY:	return "PREENTRY";
@@ -470,6 +519,58 @@ static int swsplit_ev_open(struct inode *inode, struct file *file)
 static const struct file_operations swsplit_ev_fops = {
 	.owner = THIS_MODULE,
 	.open = swsplit_ev_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = seq_release,
+};
+
+static void *swsplit_fb_start(struct seq_file *m, loff_t *pos)
+{
+	return *pos < SWSPLIT_FB_SIZE ? pos : NULL;
+}
+
+static void *swsplit_fb_next(struct seq_file *m, void *v, loff_t *pos)
+{
+	++*pos;
+	return *pos < SWSPLIT_FB_SIZE ? pos : NULL;
+}
+
+static void swsplit_fb_stop(struct seq_file *m, void *v)
+{
+}
+
+static int swsplit_fb_show(struct seq_file *m, void *v)
+{
+	loff_t i = *(loff_t *)v;
+	struct swsplit_fb e;
+	unsigned long flags;
+
+	spin_lock_irqsave(&swsplit_lock, flags);
+	e = swsplit_fb[i];
+	spin_unlock_irqrestore(&swsplit_lock, flags);
+	if (!e.used)
+		return 0;
+	seq_printf(m, "head=%u reason=%s(%u) count=%u win=%lx anon=%llx ts=%llu\n",
+		   e.head, swsplit_reason_name(e.reason), e.reason, e.count,
+		   e.win, e.anon_vma, e.ts);
+	return 0;
+}
+
+static const struct seq_operations swsplit_fb_ops = {
+	.start = swsplit_fb_start,
+	.next = swsplit_fb_next,
+	.stop = swsplit_fb_stop,
+	.show = swsplit_fb_show,
+};
+
+static int swsplit_fb_open(struct inode *inode, struct file *file)
+{
+	return seq_open(file, &swsplit_fb_ops);
+}
+
+static const struct file_operations swsplit_fb_fops = {
+	.owner = THIS_MODULE,
+	.open = swsplit_fb_open,
 	.read = seq_read,
 	.llseek = seq_lseek,
 	.release = seq_release,
@@ -590,6 +691,7 @@ static int __init swapin_split_track_init(void)
 	debugfs_create_file("reset", 0200, dir, NULL, &swsplit_reset_fops);
 	debugfs_create_file("stats", 0400, dir, NULL, &swsplit_stats_fops);
 	debugfs_create_file("events", 0400, dir, NULL, &swsplit_ev_fops);
+	debugfs_create_file("fallbacks", 0400, dir, NULL, &swsplit_fb_fops);
 	return 0;
 }
 late_initcall(swapin_split_track_init);
