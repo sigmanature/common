@@ -627,6 +627,9 @@ static struct kobj_attribute _name##_attr = __ATTR_RO(_name)
 DEFINE_MTHP_STAT_ATTR(anon_fault_alloc, MTHP_STAT_ANON_FAULT_ALLOC);
 DEFINE_MTHP_STAT_ATTR(anon_fault_fallback, MTHP_STAT_ANON_FAULT_FALLBACK);
 DEFINE_MTHP_STAT_ATTR(anon_fault_fallback_charge, MTHP_STAT_ANON_FAULT_FALLBACK_CHARGE);
+DEFINE_MTHP_STAT_ATTR(anon_fault_fallback_wmark, MTHP_STAT_ANON_FAULT_FALLBACK_WMARK);
+DEFINE_MTHP_STAT_ATTR(anon_fault_fallback_fragment, MTHP_STAT_ANON_FAULT_FALLBACK_FRAGMENT);
+DEFINE_MTHP_STAT_ATTR(anon_fault_fallback_other, MTHP_STAT_ANON_FAULT_FALLBACK_OTHER);
 DEFINE_MTHP_STAT_ATTR(zswpout, MTHP_STAT_ZSWPOUT);
 DEFINE_MTHP_STAT_ATTR(swpin, MTHP_STAT_SWPIN);
 DEFINE_MTHP_STAT_ATTR(swpin_fallback, MTHP_STAT_SWPIN_FALLBACK);
@@ -648,6 +651,9 @@ static struct attribute *anon_stats_attrs[] = {
 	&anon_fault_alloc_attr.attr,
 	&anon_fault_fallback_attr.attr,
 	&anon_fault_fallback_charge_attr.attr,
+	&anon_fault_fallback_wmark_attr.attr,
+	&anon_fault_fallback_fragment_attr.attr,
+	&anon_fault_fallback_other_attr.attr,
 #ifndef CONFIG_SHMEM
 	&zswpout_attr.attr,
 	&swpin_attr.attr,

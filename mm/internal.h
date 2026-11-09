@@ -23,6 +23,16 @@
 /* Internal core VMA manipulation functions. */
 #include "vma.h"
 
+/*
+ * Last page-allocation failure reason, recorded by __zone_watermark_ok_raw().
+ * Used by the anon mTHP fault path to split fallback into watermark and
+ * fragmentation without re-scanning zones after the allocation failed.
+ */
+#define ALLOC_FAIL_REASON_NONE		0
+#define ALLOC_FAIL_REASON_WMARK		1
+#define ALLOC_FAIL_REASON_FRAGMENT	2
+DECLARE_PER_CPU(int, last_alloc_fail_reason);
+
 struct folio_batch;
 
 /*

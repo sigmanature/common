@@ -152,6 +152,9 @@ enum mthp_stat_item {
 	MTHP_STAT_ANON_FAULT_ALLOC,
 	MTHP_STAT_ANON_FAULT_FALLBACK,
 	MTHP_STAT_ANON_FAULT_FALLBACK_CHARGE,
+	MTHP_STAT_ANON_FAULT_FALLBACK_WMARK,
+	MTHP_STAT_ANON_FAULT_FALLBACK_FRAGMENT,
+	MTHP_STAT_ANON_FAULT_FALLBACK_OTHER,
 	MTHP_STAT_ZSWPOUT,
 	MTHP_STAT_SWPIN,
 	MTHP_STAT_SWPIN_FALLBACK,
@@ -425,8 +428,7 @@ static inline int split_huge_page(struct page *page)
 {
 	return split_huge_page_to_list_to_order(page, NULL, 0);
 }
-void deferred_split_folio(struct folio *folio, bool partially_mapped,
-			  unsigned int reason, struct vm_area_struct *vma);
+void deferred_split_folio(struct folio *folio, bool partially_mapped);
 
 void __split_huge_pmd(struct vm_area_struct *vma, pmd_t *pmd,
 		unsigned long address, bool freeze);
@@ -626,9 +628,7 @@ static inline int try_folio_split_to_order(struct folio *folio,
 	return -EINVAL;
 }
 
-static inline void deferred_split_folio(struct folio *folio, bool partially_mapped,
-					unsigned int reason,
-					struct vm_area_struct *vma) {}
+static inline void deferred_split_folio(struct folio *folio, bool partially_mapped) {}
 #define split_huge_pmd(__vma, __pmd, __address)	\
 	do { } while (0)
 

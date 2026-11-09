@@ -5364,6 +5364,7 @@ static struct folio *alloc_anon_folio(struct vm_fault *vmf)
 	pte_t *pte;
 	gfp_t gfp;
 	int order;
+	int fail_reason;
 
 	/*
 	 * If uffd is active for the vma we need per-page fault fidelity to
@@ -5408,6 +5409,7 @@ static struct folio *alloc_anon_folio(struct vm_fault *vmf)
 
 	/* Try allocating the highest of the remaining orders. */
 	gfp = vma_thp_gfp_mask(vma);
+	this_cpu_write(last_alloc_fail_reason, ALLOC_FAIL_REASON_NONE);
 	while (orders) {
 		addr = ALIGN_DOWN(vmf->address, PAGE_SIZE << order);
 		folio = vma_alloc_folio(gfp, order, vma, addr);
@@ -5429,6 +5431,20 @@ static struct folio *alloc_anon_folio(struct vm_fault *vmf)
 			if (user_alloc_needs_zeroing())
 				folio_zero_user(folio, vmf->address);
 			return folio;
+		}
+
+		fail_reason = this_cpu_read(last_alloc_fail_reason);
+		this_cpu_write(last_alloc_fail_reason, ALLOC_FAIL_REASON_NONE);
+		switch (fail_reason) {
+		case ALLOC_FAIL_REASON_WMARK:
+			count_mthp_stat(order, MTHP_STAT_ANON_FAULT_FALLBACK_WMARK);
+			break;
+		case ALLOC_FAIL_REASON_FRAGMENT:
+			count_mthp_stat(order, MTHP_STAT_ANON_FAULT_FALLBACK_FRAGMENT);
+			break;
+		default:
+			count_mthp_stat(order, MTHP_STAT_ANON_FAULT_FALLBACK_OTHER);
+			break;
 		}
 
 next:

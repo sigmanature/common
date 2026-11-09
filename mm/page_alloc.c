@@ -3535,6 +3535,7 @@ static inline long __zone_watermark_unusable_free(struct zone *z,
 #define ALLOC_STALL_REASON_WMARK	1
 #define ALLOC_STALL_REASON_FRAGMENT	2
 DEFINE_PER_CPU(int, last_alloc_stall_reason);
+DEFINE_PER_CPU(int, last_alloc_fail_reason);
 
 bool __zone_watermark_ok_raw(struct zone *z, unsigned int order, unsigned long mark,
 			 int highest_zoneidx, unsigned int alloc_flags,
@@ -3581,6 +3582,7 @@ bool __zone_watermark_ok_raw(struct zone *z, unsigned int order, unsigned long m
 	 * even if a suitable page happened to be free.
 	 */
 	if (free_pages <= min + z->lowmem_reserve[highest_zoneidx]) {
+		this_cpu_write(last_alloc_fail_reason, ALLOC_FAIL_REASON_WMARK);
 		if (direct_reclaim) {
 			trace_alloc_stall_lowwatermark(z, order, min, free_pages,
 					       alloc_flags);
@@ -3625,6 +3627,7 @@ bool __zone_watermark_ok_raw(struct zone *z, unsigned int order, unsigned long m
 		__this_cpu_write(last_alloc_stall_reason,
 				 ALLOC_STALL_REASON_FRAGMENT);
 	}
+	this_cpu_write(last_alloc_fail_reason, ALLOC_FAIL_REASON_FRAGMENT);
 	return false;
 }
 
