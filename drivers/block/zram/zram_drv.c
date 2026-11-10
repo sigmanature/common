@@ -2550,30 +2550,82 @@ static bool is_multi_pages_partial_io(struct bio_vec *bvec)
 	return bvec->bv_len != ZCOMP_MULTI_PAGES_SIZE;
 }
 
+static int zram_read_partial_from_zspool(struct zram *zram, struct page *page,
+					u32 index, int offset)
+{
+	struct zcomp_strm *zstrm = NULL;
+	unsigned long handle;
+	unsigned int size;
+	void *src, *dst;
+	u32 prio;
+	int ret;
+	unsigned long page_size = ZCOMP_MULTI_PAGES_SIZE;
+
+	handle = zram_get_handle(zram, index);
+	if (!handle || zram_test_flag(zram, index, ZRAM_SAME)) {
+		unsigned long value = handle;
+		void *mem;
+
+		mem = kmap_local_page(page);
+		zram_fill_page(mem, PAGE_SIZE, value);
+		kunmap_local(mem);
+		return 0;
+	}
+
+	size = zram_get_obj_size(zram, index);
+	if (size != page_size) {
+		prio = zram_get_priority(zram, index);
+		zstrm = zcomp_stream_get(zram->comps[prio]);
+	}
+
+	src = zs_obj_read_begin(zram->mem_pool, handle, size,
+				zstrm ? zstrm->local_copy : NULL);
+	if (size == page_size) {
+		dst = kmap_local_page(page);
+		memcpy(dst, src + offset, PAGE_SIZE);
+		kunmap_local(dst);
+		ret = 0;
+	} else {
+		dst = kmap_local_page(page);
+		ret = zcomp_decompress(zram->comps[prio], zstrm, src, size,
+				       zstrm->buffer, page_size);
+		memcpy(dst, zstrm->buffer + offset, PAGE_SIZE);
+		kunmap_local(dst);
+		zcomp_stream_put(zstrm);
+	}
+	zs_obj_read_end(zram->mem_pool, handle, size, src);
+
+	return ret;
+}
+
 static int zram_bvec_read_multi_pages_partial(struct zram *zram,
 					      struct bio_vec *bvec,
 					      u32 index, int offset,
 					      struct bio *bio)
 {
-	struct page *page;
-	void *dst;
 	int ret;
 
 	count_vm_event(ZRAM_BVEC_READ_PARTIAL);
 	trace_zram_partial_read(index, offset);
-	page = alloc_pages(GFP_NOIO | __GFP_COMP, ZCOMP_MULTI_PAGES_ORDER);
-	if (!page)
-		return -ENOMEM;
 
-	ret = zram_read_page_size(zram, page, index, bio, ZCOMP_MULTI_PAGES_SIZE);
-	if (!ret) {
-		dst = kmap_local_page(page);
-		memcpy_to_bvec(bvec, dst + offset);
-		kunmap_local(dst);
-		atomic64_inc(&zram->stats.zram_bio_read_multi_pages_partial_count);
+	zram_slot_lock(zram, index);
+	if (!zram_test_flag(zram, index, ZRAM_WB)) {
+		ret = zram_read_partial_from_zspool(zram, bvec->bv_page,
+						    index, offset);
+		zram_slot_unlock(zram, index);
+	} else {
+		unsigned long blk_idx = zram_get_handle(zram, index);
+
+		zram_slot_unlock(zram, index);
+		ret = read_from_bdev(zram, bvec->bv_page, blk_idx, bio);
 	}
 
-	__free_pages(page, ZCOMP_MULTI_PAGES_ORDER);
+	if (WARN_ON(ret < 0))
+		pr_err("Decompression failed! err=%d, page=%u offset=%d\n",
+		       ret, index, offset);
+	if (!ret)
+		atomic64_inc(&zram->stats.zram_bio_read_multi_pages_partial_count);
+
 	return ret;
 }
 
