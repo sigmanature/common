@@ -4848,10 +4848,18 @@ static struct folio *alloc_swap_folio(struct vm_fault *vmf)
 	/* Try allocating the highest of the remaining orders. */
 	gfp = vma_thp_gfp_mask(vma);
 	/*
-	 * Force direct reclaim for swapin large-folio allocation so that
-	 * zram partial-read allocations and swapin fallback can be attributed.
+	 * kexp: swap-in large folio reclaim policy, two independent bits:
+	 *   swapin_direct_reclaim=1 -> __GFP_DIRECT_RECLAIM (blocking)
+	 *   swapin_kswapd_reclaim=1 -> __GFP_KSWAPD_RECLAIM (wake kswapd)
+	 * The base mask is reduced to these bits so the tested mode does not
+	 * depend on the THP defrag mode or on VMA flags. With both 0 the
+	 * allocation fails fast and falls back to a smaller order.
 	 */
-	gfp |= __GFP_DIRECT_RECLAIM;
+	gfp &= ~__GFP_RECLAIM;
+	if (swapin_direct_reclaim)
+		gfp |= __GFP_DIRECT_RECLAIM;
+	if (swapin_kswapd_reclaim)
+		gfp |= __GFP_KSWAPD_RECLAIM;
 	while (orders) {
 		addr = ALIGN_DOWN(vmf->address, PAGE_SIZE << order);
 		folio = vma_alloc_folio(gfp, order, vma, addr);

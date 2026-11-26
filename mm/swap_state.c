@@ -22,9 +22,44 @@
 #include <linux/vmalloc.h>
 #include <linux/huge_mm.h>
 #include <linux/shmem_fs.h>
+#include <linux/sysctl.h>
 #include "internal.h"
 #include "swap_table.h"
 #include "swap.h"
+
+/*
+ * kexp: swap-in large folio reclaim policy. Two independent bits, applied
+ * on top of the base mask from vma_thp_gfp_mask():
+ *   swapin_direct_reclaim: 1 = allow __GFP_DIRECT_RECLAIM (synchronous)
+ *   swapin_kswapd_reclaim: 1 = allow __GFP_KSWAPD_RECLAIM (wake kswapd)
+ * Default keeps the previous behavior: direct reclaim only.
+ */
+unsigned int swapin_direct_reclaim = 1;
+unsigned int swapin_kswapd_reclaim;
+
+static struct ctl_table swapin_sysctls[] = {
+	{
+		.procname	= "swapin_direct_reclaim",
+		.data		= &swapin_direct_reclaim,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_douintvec,
+	},
+	{
+		.procname	= "swapin_kswapd_reclaim",
+		.data		= &swapin_kswapd_reclaim,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_douintvec,
+	},
+};
+
+static int __init swapin_sysctl_init(void)
+{
+	register_sysctl_init("vm", swapin_sysctls);
+	return 0;
+}
+late_initcall(swapin_sysctl_init);
 
 /*
  * swapper_space is a fiction, retained to simplify the path through

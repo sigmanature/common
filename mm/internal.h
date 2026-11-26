@@ -577,6 +577,8 @@ DECLARE_STATIC_KEY_MAYBE(CONFIG_DEBUG_VM, check_pages_enabled);
 
 extern int min_free_kbytes;
 extern int defrag_mode;
+extern unsigned int swapin_direct_reclaim;
+extern unsigned int swapin_kswapd_reclaim;
 
 void setup_per_zone_wmarks(void);
 void calculate_min_free_kbytes(void);
